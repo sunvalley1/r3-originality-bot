@@ -1,15 +1,15 @@
 {
-  "_README": "DRAFT for the operator. Copy to %USERPROFILE%\.r3-signer-bin\signer.config.json next to signer.cjs. No secrets here: addresses and paths only. allowlistSha256 is filled in after allowlist-init prints it.",
+  "_README": "DRAFT for the operator. Copy to %USERPROFILE%/.r3-signer-bin/signer.config.json next to signer.cjs. No secrets here: addresses and paths only. allowlistSha256 is filled in after allowlist-init prints it.",
   "chainId": 10,
   "rpcUrl": "https://optimism.drpc.org",
   "signerAddress": "0x2AD670e5953a85C998cDf1C2f6D74386aB735d4a",
   "owner": "0xB5a6a9c6d779e7dd7815f94AE2CcFb153a21801C",
-  "projectRoot": "C:\Users\12\Desktop\Trading-bot-2",
-  "keystorePath": "C:\Users\12\.foundry\keystores\r3-bot",
+  "projectRoot": "C:\\Users\\12\\Desktop\\Trading-bot-2",
+  "keystorePath": "C:\\Users\\12\\.foundry\\keystores\\r3-bot",
   "signerMode": "dpapi",
-  "unlockPath": "C:\Users\12\.r3-signer-keys\password.dpapi",
-  "allowlistPath": "C:\Users\12\.r3-signer-bin\r3-allowlist.json",
+  "unlockPath": "C:\\Users\\12\\.r3-signer-keys\\password.dpapi",
+  "allowlistPath": "C:\\Users\\12\\.r3-signer-bin\\r3-allowlist.json",
   "allowlistSha256": "0000000000000000000000000000000000000000000000000000000000000000",
-  "sendLockPath": "C:\Users\12\.r3-signer-state\r3-signer-send.lock",
-  "logPath": "C:\Users\12\.r3-signer-state\r3-signer.log.jsonl"
+  "sendLockPath": "C:\\Users\\12\\.r3-signer-state\\r3-signer-send.lock",
+  "logPath": "C:\\Users\\12\\.r3-signer-state\\r3-signer.log.jsonl"
 }
