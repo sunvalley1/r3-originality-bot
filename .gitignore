@@ -3,3 +3,7 @@ run/
 *.dpapi
 *.keystore
 keystores/
+
+# the private key is pasted here once, converted, then removed
+.env
+.env.*
