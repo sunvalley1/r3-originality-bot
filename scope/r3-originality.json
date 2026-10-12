@@ -1,0 +1,1379 @@
+{
+ "found": "2026-10-12T08:15:00.851Z",
+ "chain": 10,
+ "note": "Deep Funding Round 3 originality v3 markets, as deep-r3-trade defines them: parent 0x37ab5cbe... (multi-scalar over bundles A/B/C, collateral sUSDS) -> middles A 0xc217920a..., B 0xf0638b89..., C 0x99a94113... -> 98 scalar children, each collateralised in its own repo token. A second family of 98 under 0x52f80fc4... is not part of v3 and is excluded. The skill's step C rebuilds this list from deep.seer.pm and its static table; this file is only a human-readable index.",
+ "markets": [
+  {
+   "id": "0xb52c7e58dc48250b6cb4fbe5ed251f617700bf06",
+   "chain": 10,
+   "repo": "arkworks-rs/algebra",
+   "family": "Bundle A",
+   "parent": "0xc217920a91f1b3d56276393aa5345f01a848ecf0",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-arkworks-rsalgebra-in-round-3-of-t-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0x86b3b071bd6c383e4544b18353cde9ca203158ce",
+   "chain": 10,
+   "repo": "OffchainLabs/stylus-sdk-rs",
+   "family": "Bundle B",
+   "parent": "0xf0638b8999aaa0de3f5d02048a385a64e7a63aec",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-offchainlabsstylus-sdk-rs-in-round-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0x018a386a46949fbc8781b1254636b3a76e60a57c",
+   "chain": 10,
+   "repo": "ethereum/js-ethereum-cryptography",
+   "family": "Bundle A",
+   "parent": "0xc217920a91f1b3d56276393aa5345f01a848ecf0",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-ethereumjs-ethereum-cryptography-i-3",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0x3ea9da5b674276d48d843b7e07daf95ac89ceffa",
+   "chain": 10,
+   "repo": "ethpandaops/checkpointz",
+   "family": "Bundle C",
+   "parent": "0x99a941135226813037e15e34956fdd79761307d3",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-ethpandaopscheckpointz-in-round-3--2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0x8717e0e2733acb24ac964667e2252bc118fb2249",
+   "chain": 10,
+   "repo": "Cyfrin/aderyn",
+   "family": "Bundle B",
+   "parent": "0xf0638b8999aaa0de3f5d02048a385a64e7a63aec",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-cyfrinaderyn-in-round-3-of-the-dee-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0x5d6a571b0f663c33831e6f81dd3c3f554eca188b",
+   "chain": 10,
+   "repo": "ethereum/py_ecc",
+   "family": "Bundle A",
+   "parent": "0xc217920a91f1b3d56276393aa5345f01a848ecf0",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-ethereumpyecc-in-round-3-of-the-de-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0x526f501d8a0a9426140d3c710262e11c3849a474",
+   "chain": 10,
+   "repo": "ethereum/execution-apis",
+   "family": "Bundle B",
+   "parent": "0xf0638b8999aaa0de3f5d02048a385a64e7a63aec",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-ethereumexecution-apis-in-round-3--2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0x04f4d33c6aa72320a822bc0fcb32e097a45ae4f9",
+   "chain": 10,
+   "repo": "smartcontracts/simple-optimism-node",
+   "family": "Bundle A",
+   "parent": "0xc217920a91f1b3d56276393aa5345f01a848ecf0",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-smartcontractssimple-optimism-node-3",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0x293a1858e689c117708e509770b283f281bbf6cb",
+   "chain": 10,
+   "repo": "a16z/halmos",
+   "family": "Bundle B",
+   "parent": "0xf0638b8999aaa0de3f5d02048a385a64e7a63aec",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-a16zhalmos-in-round-3-of-the-deep--2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0x87a54a3ad188dfea96aa128922351fdc12da80e3",
+   "chain": 10,
+   "repo": "erigontech/erigon",
+   "family": "Bundle B",
+   "parent": "0xf0638b8999aaa0de3f5d02048a385a64e7a63aec",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-erigontecherigon-in-round-3-of-the-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0x52634d6c3fb85d5f4566550e0a85bed365524c39",
+   "chain": 10,
+   "repo": "axiom-crypto/snark-verifier",
+   "family": "Bundle B",
+   "parent": "0xf0638b8999aaa0de3f5d02048a385a64e7a63aec",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-axiom-cryptosnark-verifier-in-roun-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0x19eb4b247fe868df4ae6d94c118ca39b950a738d",
+   "chain": 10,
+   "repo": "lambdaclass/ethrex",
+   "family": "Bundle B",
+   "parent": "0xf0638b8999aaa0de3f5d02048a385a64e7a63aec",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-lambdaclassethrex-in-round-3-of-th-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0x1c3486fec53da0d19a4b0253b83748df31e10178",
+   "chain": 10,
+   "repo": "risc0/risc0-ethereum",
+   "family": "Bundle B",
+   "parent": "0xf0638b8999aaa0de3f5d02048a385a64e7a63aec",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-risc0risc0-ethereum-in-round-3-of--2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0xd71b2fe2ff2c91d5d822ce6399c646137723186a",
+   "chain": 10,
+   "repo": "DefiLlama/DefiLlama-Adapters",
+   "family": "Bundle A",
+   "parent": "0xc217920a91f1b3d56276393aa5345f01a848ecf0",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-defillamadefillama-adapters-in-rou-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0x9fc615e9a9e2066d3e8dda5c1c5280461489d808",
+   "chain": 10,
+   "repo": "Consensys/gnark-crypto",
+   "family": "Bundle A",
+   "parent": "0xc217920a91f1b3d56276393aa5345f01a848ecf0",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-consensysgnark-crypto-in-round-3-o-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0x6aa9ba4a89cc1f5d854b898ed34f4370a3857585",
+   "chain": 10,
+   "repo": "NethermindEth/juno",
+   "family": "Bundle B",
+   "parent": "0xf0638b8999aaa0de3f5d02048a385a64e7a63aec",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-nethermindethjuno-in-round-3-of-th-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0x93d2239a2ae25e0ed759b9caf246c3c555b55a2f",
+   "chain": 10,
+   "repo": "Commit-Boost/commit-boost-client",
+   "family": "Bundle B",
+   "parent": "0xf0638b8999aaa0de3f5d02048a385a64e7a63aec",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-commit-boostcommit-boost-client-in-3",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0x36b1a703d790770ef14b875d3a0d2e0ded6234c1",
+   "chain": 10,
+   "repo": "ethstaker/ethstaker-deposit-cli",
+   "family": "Bundle B",
+   "parent": "0xf0638b8999aaa0de3f5d02048a385a64e7a63aec",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-ethstakerethstaker-deposit-cli-in--3",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0x2109380e3dee45109d635c9968733c1f43568125",
+   "chain": 10,
+   "repo": "swiss-knife-xyz/swiss-knife",
+   "family": "Bundle B",
+   "parent": "0xf0638b8999aaa0de3f5d02048a385a64e7a63aec",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-swiss-knife-xyzswiss-knife-in-roun-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0x842cf887862213513895e1aa1714723009512932",
+   "chain": 10,
+   "repo": "a16z/helios",
+   "family": "Bundle B",
+   "parent": "0xf0638b8999aaa0de3f5d02048a385a64e7a63aec",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-a16zhelios-in-round-3-of-the-deep--2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0xfc80e4c59c72ab78d73886cf98139a0e4726deee",
+   "chain": 10,
+   "repo": "succinctlabs/rsp",
+   "family": "Bundle B",
+   "parent": "0xf0638b8999aaa0de3f5d02048a385a64e7a63aec",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-succinctlabsrsp-in-round-3-of-the--2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0xecbf7ba97acc47e030ab623fa78f983892254309",
+   "chain": 10,
+   "repo": "ethereum/go-ethereum",
+   "family": "Bundle C",
+   "parent": "0x99a941135226813037e15e34956fdd79761307d3",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-ethereumgo-ethereum-in-round-3-of--2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0xf799b67f0b8da6ed75d6d31370346e2dd6be187d",
+   "chain": 10,
+   "repo": "LFDT-web3j/web3j",
+   "family": "Bundle A",
+   "parent": "0xc217920a91f1b3d56276393aa5345f01a848ecf0",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-lfdt-web3jweb3j-in-round-3-of-the--2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0x1773e3a7d522e80903e9914a88c815e126fb0f81",
+   "chain": 10,
+   "repo": "wealdtech/ethdo",
+   "family": "Bundle A",
+   "parent": "0xc217920a91f1b3d56276393aa5345f01a848ecf0",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-wealdtechethdo-in-round-3-of-the-d-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0x9de9aaa9c3beb5226a0acedfa3515c5a3c658b1d",
+   "chain": 10,
+   "repo": "remix-project-org/remix-project",
+   "family": "Bundle C",
+   "parent": "0x99a941135226813037e15e34956fdd79761307d3",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-remix-project-orgremix-project-in--3",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0x38a9dc84c9f940262b548856c1869f992ee80ba4",
+   "chain": 10,
+   "repo": "argotorg/solidity",
+   "family": "Bundle C",
+   "parent": "0x99a941135226813037e15e34956fdd79761307d3",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-argotorgsolidity-in-round-3-of-the-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0xb2453e9a21cc82280fa95e6bbe6ca34e78b722d4",
+   "chain": 10,
+   "repo": "grandinetech/grandine",
+   "family": "Bundle C",
+   "parent": "0x99a941135226813037e15e34956fdd79761307d3",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-grandinetechgrandine-in-round-3-of-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0x6a8c24d317ca7edcc0c996d41950e0cf2e622e6c",
+   "chain": 10,
+   "repo": "sigp/lighthouse",
+   "family": "Bundle C",
+   "parent": "0x99a941135226813037e15e34956fdd79761307d3",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-sigplighthouse-in-round-3-of-the-d-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0xc8db7cdd4bc8006353dd09d87ecab65f84c620e5",
+   "chain": 10,
+   "repo": "wighawag/hardhat-deploy",
+   "family": "Bundle A",
+   "parent": "0xc217920a91f1b3d56276393aa5345f01a848ecf0",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-wighawaghardhat-deploy-in-round-3--2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0x6a6a3326d701d464034d141bece8c21a06b7854b",
+   "chain": 10,
+   "repo": "taikoxyz/taiko-mono",
+   "family": "Bundle A",
+   "parent": "0xc217920a91f1b3d56276393aa5345f01a848ecf0",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-taikoxyztaiko-mono-in-round-3-of-t-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0xddd9d1a6ace5dca0432719b05691bb2cc7e0b9dd",
+   "chain": 10,
+   "repo": "ethereum-lists/chains",
+   "family": "Bundle B",
+   "parent": "0xf0638b8999aaa0de3f5d02048a385a64e7a63aec",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-ethereum-listschains-in-round-3-of-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0x72e12907d277199d7a44fde21d7dd981150b0f1a",
+   "chain": 10,
+   "repo": "EspressoSystems/jellyfish",
+   "family": "Bundle A",
+   "parent": "0xc217920a91f1b3d56276393aa5345f01a848ecf0",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-espressosystemsjellyfish-in-round--2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0x34e4762227c29fb484c79cdc0a2a305fdd39ba56",
+   "chain": 10,
+   "repo": "apeworx/ape",
+   "family": "Bundle B",
+   "parent": "0xf0638b8999aaa0de3f5d02048a385a64e7a63aec",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-apeworxape-in-round-3-of-the-deep--2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0xde4c752ed72f51de6d57085728a564a08866e97c",
+   "chain": 10,
+   "repo": "openzeppelin/openzeppelin-contracts",
+   "family": "Bundle C",
+   "parent": "0x99a941135226813037e15e34956fdd79761307d3",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-openzeppelinopenzeppelin-contracts-3",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0x4b8bda295e28375ed17abc8d1472e9cccadc93aa",
+   "chain": 10,
+   "repo": "DefiLlama/chainlist",
+   "family": "Bundle A",
+   "parent": "0xc217920a91f1b3d56276393aa5345f01a848ecf0",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-defillamachainlist-in-round-3-of-t-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0xad30e4cc2f96e533a92cef4fcd9c57d4a4e5188c",
+   "chain": 10,
+   "repo": "safe-global/safe-smart-account",
+   "family": "Bundle C",
+   "parent": "0x99a941135226813037e15e34956fdd79761307d3",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-safe-globalsafe-smart-account-in-r-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0x08dafca21f736aec39d0a45adf779cb8e437a61e",
+   "chain": 10,
+   "repo": "ethpandaops/ethereum-package",
+   "family": "Bundle C",
+   "parent": "0x99a941135226813037e15e34956fdd79761307d3",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-ethpandaopsethereum-package-in-rou-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0x5285cd403845c358140c87f75488aec1aaf1a1f2",
+   "chain": 10,
+   "repo": "lambdaclass/lambda_ethereum_consensus",
+   "family": "Bundle C",
+   "parent": "0x99a941135226813037e15e34956fdd79761307d3",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-lambdaclasslambdaethereumconsensus-3",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0xfd03f01a33eb653b75f59ab8e17c2f9ead376354",
+   "chain": 10,
+   "repo": "ethpandaops/ethereum-helm-charts",
+   "family": "Bundle C",
+   "parent": "0x99a941135226813037e15e34956fdd79761307d3",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-ethpandaopsethereum-helm-charts-in-3",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0x107af2f9daacad63256adc9c54ddbd630b2b87d6",
+   "chain": 10,
+   "repo": "alloy-rs/alloy",
+   "family": "Bundle B",
+   "parent": "0xf0638b8999aaa0de3f5d02048a385a64e7a63aec",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-alloy-rsalloy-in-round-3-of-the-de-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0x1ac42dde2f605435771a0a4b6928b8c802388285",
+   "chain": 10,
+   "repo": "OffchainLabs/prysm",
+   "family": "Bundle C",
+   "parent": "0x99a941135226813037e15e34956fdd79761307d3",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-offchainlabsprysm-in-round-3-of-th-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0xdd8e32840a811d26aac9112f530490ee86d89bbc",
+   "chain": 10,
+   "repo": "dappnode/DAppNode",
+   "family": "Bundle A",
+   "parent": "0xc217920a91f1b3d56276393aa5345f01a848ecf0",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-dappnodedappnode-in-round-3-of-the-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0x0954b44c816f034c6c30a0b049f0ceb6bda6100a",
+   "chain": 10,
+   "repo": "l2beat/l2beat",
+   "family": "Bundle A",
+   "parent": "0xc217920a91f1b3d56276393aa5345f01a848ecf0",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-l2beatl2beat-in-round-3-of-the-dee-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0x74a00a7a338f0fa8ce7afedb27279a30cf24df85",
+   "chain": 10,
+   "repo": "supranational/blst",
+   "family": "Bundle A",
+   "parent": "0xc217920a91f1b3d56276393aa5345f01a848ecf0",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-supranationalblst-in-round-3-of-th-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0x9ab54e515c12e14048b009a366a4845570c5ee6d",
+   "chain": 10,
+   "repo": "ethereum/web3.py",
+   "family": "Bundle C",
+   "parent": "0x99a941135226813037e15e34956fdd79761307d3",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-ethereumweb3py-in-round-3-of-the-d-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0x15607f6d09dd27d174d6d76ebbcc708da5a56646",
+   "chain": 10,
+   "repo": "hyperledger-web3j/web3j",
+   "family": "Bundle C",
+   "parent": "0x99a941135226813037e15e34956fdd79761307d3",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-hyperledger-web3jweb3j-in-round-3--2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0x73918952494d08ed3eb5c2bf82eb056f51274639",
+   "chain": 10,
+   "repo": "edb-rs/edb",
+   "family": "Bundle B",
+   "parent": "0xf0638b8999aaa0de3f5d02048a385a64e7a63aec",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-edb-rsedb-in-round-3-of-the-deep-f-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0x48eb0ebbb9284b0d8c51747da2fc4b9f342b401f",
+   "chain": 10,
+   "repo": "succinctlabs/op-succinct",
+   "family": "Bundle B",
+   "parent": "0xf0638b8999aaa0de3f5d02048a385a64e7a63aec",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-succinctlabsop-succinct-in-round-3-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0xe263e7febb2ccfe1ebb05f289cf858d3becec83f",
+   "chain": 10,
+   "repo": "blockscout/blockscout",
+   "family": "Bundle A",
+   "parent": "0xc217920a91f1b3d56276393aa5345f01a848ecf0",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-blockscoutblockscout-in-round-3-of-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0xec73b19d493bb773eaed4df6b0c8f18842e77c26",
+   "chain": 10,
+   "repo": "nomicfoundation/hardhat",
+   "family": "Bundle C",
+   "parent": "0x99a941135226813037e15e34956fdd79761307d3",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-nomicfoundationhardhat-in-round-3--2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0x808055e027cada3fb6d2b84104cd46b6685c048e",
+   "chain": 10,
+   "repo": "protofire/solhint",
+   "family": "Bundle A",
+   "parent": "0xc217920a91f1b3d56276393aa5345f01a848ecf0",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-protofiresolhint-in-round-3-of-the-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0x7fa95b23093b66d4b4fd0e89717b7e7883c888bc",
+   "chain": 10,
+   "repo": "ethers-io/ethers.js",
+   "family": "Bundle C",
+   "parent": "0x99a941135226813037e15e34956fdd79761307d3",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-ethers-ioethersjs-in-round-3-of-th-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0x4b2b2d4e947c9e33e3ae18979562e752606127ac",
+   "chain": 10,
+   "repo": "ethdebug/format",
+   "family": "Bundle C",
+   "parent": "0x99a941135226813037e15e34956fdd79761307d3",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-ethdebugformat-in-round-3-of-the-d-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0xb44e4ad21d40efb87a87c0692e28c71c90d08d20",
+   "chain": 10,
+   "repo": "flashbots/rbuilder",
+   "family": "Bundle A",
+   "parent": "0xc217920a91f1b3d56276393aa5345f01a848ecf0",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-flashbotsrbuilder-in-round-3-of-th-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0xfd9f5746c9451fedc03fa9d334d84099b61017ca",
+   "chain": 10,
+   "repo": "flashbots/mev-boost-relay",
+   "family": "Bundle A",
+   "parent": "0xc217920a91f1b3d56276393aa5345f01a848ecf0",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-flashbotsmev-boost-relay-in-round--2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0xc53217f3ca3371921076c4e7ea9457ea3b758317",
+   "chain": 10,
+   "repo": "flashbots/mev-boost",
+   "family": "Bundle A",
+   "parent": "0xc217920a91f1b3d56276393aa5345f01a848ecf0",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-flashbotsmev-boost-in-round-3-of-t-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0x7942645c35fa3a7f84ff1c731c81087f375c1eaa",
+   "chain": 10,
+   "repo": "vyperlang/titanoboa",
+   "family": "Bundle C",
+   "parent": "0x99a941135226813037e15e34956fdd79761307d3",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-vyperlangtitanoboa-in-round-3-of-t-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0x5ba02d2373096140102b6d552e62f9d0f7c7c39d",
+   "chain": 10,
+   "repo": "skalenetwork/libBLS",
+   "family": "Bundle A",
+   "parent": "0xc217920a91f1b3d56276393aa5345f01a848ecf0",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-skalenetworklibbls-in-round-3-of-t-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0xd413f199fb40a5c85e96b3582dda718570ae7675",
+   "chain": 10,
+   "repo": "intellij-solidity/intellij-solidity",
+   "family": "Bundle A",
+   "parent": "0xc217920a91f1b3d56276393aa5345f01a848ecf0",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-intellij-solidityintellij-solidity-3",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0x5457786b0f850f037496073905fd62de3572fa83",
+   "chain": 10,
+   "repo": "otterscan/otterscan",
+   "family": "Bundle B",
+   "parent": "0xf0638b8999aaa0de3f5d02048a385a64e7a63aec",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-otterscanotterscan-in-round-3-of-t-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0x0d91d33dc1bbe47469f5aef3dc113ed706ebabcb",
+   "chain": 10,
+   "repo": "argotorg/act",
+   "family": "Bundle C",
+   "parent": "0x99a941135226813037e15e34956fdd79761307d3",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-argotorgact-in-round-3-of-the-deep-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0xa1cc3bd62aea7b21547f327ed20e18d8b92d89d4",
+   "chain": 10,
+   "repo": "foundry-rs/foundry",
+   "family": "Bundle C",
+   "parent": "0x99a941135226813037e15e34956fdd79761307d3",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-foundry-rsfoundry-in-round-3-of-th-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0x09790fb4115e57367f47c82244cce088583e503f",
+   "chain": 10,
+   "repo": "scaffold-eth/scaffold-eth-2",
+   "family": "Bundle C",
+   "parent": "0x99a941135226813037e15e34956fdd79761307d3",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-scaffold-ethscaffold-eth-2-in-roun-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0x7cae39d3c40b0db913ba38f61f18173be8105852",
+   "chain": 10,
+   "repo": "ethereum/consensus-specs",
+   "family": "Bundle B",
+   "parent": "0xf0638b8999aaa0de3f5d02048a385a64e7a63aec",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-ethereumconsensus-specs-in-round-3-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0x7c3b8fa85d532f7ed1fd8f32054b0497541db623",
+   "chain": 10,
+   "repo": "chainsafe/lodestar",
+   "family": "Bundle B",
+   "parent": "0xf0638b8999aaa0de3f5d02048a385a64e7a63aec",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-chainsafelodestar-in-round-3-of-th-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0xf8d574d0a7dc92deb6ae61adae9ad1219aac2c73",
+   "chain": 10,
+   "repo": "ChainSafe/bls",
+   "family": "Bundle A",
+   "parent": "0xc217920a91f1b3d56276393aa5345f01a848ecf0",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-chainsafebls-in-round-3-of-the-dee-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0xc7846582934c4c1d1156ddf44d988f6857b0f743",
+   "chain": 10,
+   "repo": "herumi/mcl",
+   "family": "Bundle A",
+   "parent": "0xc217920a91f1b3d56276393aa5345f01a848ecf0",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-herumimcl-in-round-3-of-the-deep-f-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0xdfb022190820d74babd62379fe53b45f0ac1cc67",
+   "chain": 10,
+   "repo": "argotorg/hevm",
+   "family": "Bundle C",
+   "parent": "0x99a941135226813037e15e34956fdd79761307d3",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-argotorghevm-in-round-3-of-the-dee-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0xe1e506f60e6caaa6521b65231a293053b39494cd",
+   "chain": 10,
+   "repo": "consensys/teku",
+   "family": "Bundle B",
+   "parent": "0xf0638b8999aaa0de3f5d02048a385a64e7a63aec",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-consensysteku-in-round-3-of-the-de-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0x1e405c9bcf5038770efc4e5065cd216f93658b80",
+   "chain": 10,
+   "repo": "Vectorized/solady",
+   "family": "Bundle A",
+   "parent": "0xc217920a91f1b3d56276393aa5345f01a848ecf0",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-vectorizedsolady-in-round-3-of-the-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0x9525a58d53bc9d395ef56ec4c11e39370a88a304",
+   "chain": 10,
+   "repo": "ethstaker/eth-docker",
+   "family": "Bundle A",
+   "parent": "0xc217920a91f1b3d56276393aa5345f01a848ecf0",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-ethstakereth-docker-in-round-3-of--2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0xd756f4a29de73f261f32185d0982c8e454db3356",
+   "chain": 10,
+   "repo": "lambdaclass/lambdaworks",
+   "family": "Bundle A",
+   "parent": "0xc217920a91f1b3d56276393aa5345f01a848ecf0",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-lambdaclasslambdaworks-in-round-3--2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0x8df828fcba7ec2b014742e202cf091807df939e6",
+   "chain": 10,
+   "repo": "Plonky3/Plonky3",
+   "family": "Bundle A",
+   "parent": "0xc217920a91f1b3d56276393aa5345f01a848ecf0",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-plonky3plonky3-in-round-3-of-the-d-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0x5449093d1b651b090120a51acf68265bbcb56df3",
+   "chain": 10,
+   "repo": "shazow/whatsabi",
+   "family": "Bundle A",
+   "parent": "0xc217920a91f1b3d56276393aa5345f01a848ecf0",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-shazowwhatsabi-in-round-3-of-the-d-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0xeb72792576d123fee15f8974784fd9026ab8d050",
+   "chain": 10,
+   "repo": "wevm/viem",
+   "family": "Bundle C",
+   "parent": "0x99a941135226813037e15e34956fdd79761307d3",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-wevmviem-in-round-3-of-the-deep-fu-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0xcb8ab4238ae037096e274486c4892d843e769dde",
+   "chain": 10,
+   "repo": "eth-infinitism/account-abstraction",
+   "family": "Bundle B",
+   "parent": "0xf0638b8999aaa0de3f5d02048a385a64e7a63aec",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-eth-infinitismaccount-abstraction--3",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0x6ea039fba3c1a54ed6c5ef04c394dd2a9c26c52a",
+   "chain": 10,
+   "repo": "0xMiden/miden-vm",
+   "family": "Bundle B",
+   "parent": "0xf0638b8999aaa0de3f5d02048a385a64e7a63aec",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-0xmidenmiden-vm-in-round-3-of-the--2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0x45dc37854a86f647cf45890f7167c0adc19814f2",
+   "chain": 10,
+   "repo": "Certora/CertoraProver",
+   "family": "Bundle A",
+   "parent": "0xc217920a91f1b3d56276393aa5345f01a848ecf0",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-certoracertoraprover-in-round-3-of-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0xbcb9981cdb1b7ed0b01505eb9c87aa4e25a9ccc0",
+   "chain": 10,
+   "repo": "erigontech/silkworm",
+   "family": "Bundle C",
+   "parent": "0x99a941135226813037e15e34956fdd79761307d3",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-erigontechsilkworm-in-round-3-of-t-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0x238910d606c68d7198a51377c079812be40f4d99",
+   "chain": 10,
+   "repo": "ethereum/eips",
+   "family": "Bundle B",
+   "parent": "0xf0638b8999aaa0de3f5d02048a385a64e7a63aec",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-ethereumeips-in-round-3-of-the-dee-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0xdbdcdaf2aa3d75e1818029c26fef7fdd12dce893",
+   "chain": 10,
+   "repo": "holiman/goevmlab",
+   "family": "Bundle B",
+   "parent": "0xf0638b8999aaa0de3f5d02048a385a64e7a63aec",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-holimangoevmlab-in-round-3-of-the--2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0xde89236ae23777bdf655344858c44fa581c470a3",
+   "chain": 10,
+   "repo": "libp2p/libp2p",
+   "family": "Bundle A",
+   "parent": "0xc217920a91f1b3d56276393aa5345f01a848ecf0",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-libp2plibp2p-in-round-3-of-the-dee-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0x845468b87b4821fae1d42f250c382b7a3a85bdb1",
+   "chain": 10,
+   "repo": "vyperlang/vyper",
+   "family": "Bundle C",
+   "parent": "0x99a941135226813037e15e34956fdd79761307d3",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-vyperlangvyper-in-round-3-of-the-d-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0x572f1f68c236460581ad720e1b262a604d92e703",
+   "chain": 10,
+   "repo": "powdr-labs/powdr",
+   "family": "Bundle B",
+   "parent": "0xf0638b8999aaa0de3f5d02048a385a64e7a63aec",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-powdr-labspowdr-in-round-3-of-the--2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0x5a56ecb388369c2a92b51ca1e08c32f233baf178",
+   "chain": 10,
+   "repo": "hyperledger/besu",
+   "family": "Bundle C",
+   "parent": "0x99a941135226813037e15e34956fdd79761307d3",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-hyperledgerbesu-in-round-3-of-the--2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0xe48392583e40d8194c8019f4fa4c6bb60536c8b8",
+   "chain": 10,
+   "repo": "status-im/nimbus-eth2",
+   "family": "Bundle C",
+   "parent": "0x99a941135226813037e15e34956fdd79761307d3",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-status-imnimbus-eth2-in-round-3-of-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0xd264f08e1871926d45f08ba8c19927ba909ed495",
+   "chain": 10,
+   "repo": "aestus-relay/mev-boost-relay",
+   "family": "Bundle B",
+   "parent": "0xf0638b8999aaa0de3f5d02048a385a64e7a63aec",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-aestus-relaymev-boost-relay-in-rou-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0xb533d9b1becb3ee98820ee2342fbc9a062c296ca",
+   "chain": 10,
+   "repo": "argotorg/fe",
+   "family": "Bundle C",
+   "parent": "0x99a941135226813037e15e34956fdd79761307d3",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-argotorgfe-in-round-3-of-the-deep--2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0xd8825bf53db973dff16759f750c7cc86c9d45297",
+   "chain": 10,
+   "repo": "ipsilon/evmone",
+   "family": "Bundle B",
+   "parent": "0xf0638b8999aaa0de3f5d02048a385a64e7a63aec",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-ipsilonevmone-in-round-3-of-the-de-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0x4a4feb5f866310c4b538abda903e53677b5956c9",
+   "chain": 10,
+   "repo": "evmts/tevm-monorepo",
+   "family": "Bundle B",
+   "parent": "0xf0638b8999aaa0de3f5d02048a385a64e7a63aec",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-evmtstevm-monorepo-in-round-3-of-t-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0xf74142573cd11d76501dfd51d5512fc6b8ca7933",
+   "chain": 10,
+   "repo": "paulmillr/noble-curves",
+   "family": "Bundle A",
+   "parent": "0xc217920a91f1b3d56276393aa5345f01a848ecf0",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-paulmillrnoble-curves-in-round-3-o-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0x1b3140613dc1579d5486b8eee5ff8115ce7b93de",
+   "chain": 10,
+   "repo": "TrueBlocks/trueblocks-core",
+   "family": "Bundle A",
+   "parent": "0xc217920a91f1b3d56276393aa5345f01a848ecf0",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-trueblockstrueblocks-core-in-round-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0x84e989e3dd24b2d8448d2a90e72eab1202083f59",
+   "chain": 10,
+   "repo": "nethermindeth/nethermind",
+   "family": "Bundle C",
+   "parent": "0x99a941135226813037e15e34956fdd79761307d3",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-nethermindethnethermind-in-round-3-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0xf713fcde2dd95050ffe68965ab17c1f3fadebc21",
+   "chain": 10,
+   "repo": "succinctlabs/sp1",
+   "family": "Bundle B",
+   "parent": "0xf0638b8999aaa0de3f5d02048a385a64e7a63aec",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-succinctlabssp1-in-round-3-of-the--2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0xd2652335a8576ff1e61c10aa531aee08d2533cde",
+   "chain": 10,
+   "repo": "paradigmxyz/reth",
+   "family": "Bundle C",
+   "parent": "0x99a941135226813037e15e34956fdd79761307d3",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-paradigmxyzreth-in-round-3-of-the--2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0x49837e744bb14fab9b256785ab050352c3340aff",
+   "chain": 10,
+   "repo": "nethereum/nethereum",
+   "family": "Bundle C",
+   "parent": "0x99a941135226813037e15e34956fdd79761307d3",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-nethereumnethereum-in-round-3-of-t-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0x4b62af2f270b59ec49230d3a06b63752964a4311",
+   "chain": 10,
+   "repo": "dl-solarity/solidity-lib",
+   "family": "Bundle B",
+   "parent": "0xf0638b8999aaa0de3f5d02048a385a64e7a63aec",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-dl-solaritysolidity-lib-in-round-3-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  },
+  {
+   "id": "0x5c4a21e1a101c3aff192d2d307ad9bbe3d761b1e",
+   "chain": 10,
+   "repo": "argotorg/sourcify",
+   "family": "Bundle C",
+   "parent": "0x99a941135226813037e15e34956fdd79761307d3",
+   "outcomes": [
+    "DOWN",
+    "UP",
+    "Invalid"
+   ],
+   "url": "https://app.seer.pm/markets/10/what-will-be-the-average-originality-score-of-argotorgsourcify-in-round-3-of-the-2",
+   "opening": "2026-10-01T03:06:40.000Z"
+  }
+ ]
+}

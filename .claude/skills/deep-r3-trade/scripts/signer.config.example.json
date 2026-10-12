@@ -1,0 +1,45 @@
+{
+  "_README": "Copy to signer.config.json NEXT TO signer.cjs. Keys starting with an underscore are ignored. Every path is absolute. Keep this file, signer.cjs, its node_modules, the allowlist, the send-lock and the log OUTSIDE the project folder (the signer refuses to start otherwise). There is no key for an amount, a count, a rate or an expiry: the signer limits scope, never value.",
+
+  "chainId": 10,
+  "_chainId": "Must be 10 (Optimism). Any other value is a config error, not a signer for that chain.",
+
+  "rpcUrl": "https://mainnet.optimism.io",
+  "_rpcUrl": "The one RPC endpoint, pinned here and nowhere else (no argument, flag or environment variable can change it). https only, except a loopback host. It must answer eth_chainId = 0xa and should support eth_simulateV1 (simulate falls back to eth_call without it).",
+
+  "signerAddress": "0x0000000000000000000000000000000000000001",
+  "_signerAddress": "Who signs, pays gas and (a local EOA) holds every balance. Must equal the address of the keystore below, and the 'holder' recorded in the allowlist file.",
+
+  "owner": "0x0000000000000000000000000000000000000002",
+  "_owner": "The human's own address. The ONLY destination the supervised entry points (sweep-token, sweep-eth, clear-nonce) can ever send to; none of them takes a destination argument. Must differ from signerAddress.",
+
+  "projectRoot": "/absolute/path/to/the/project/folder",
+  "_projectRoot": "The folder Claude Code runs in (it holds ./run/). Used only to prove that the signer, its config, the allowlist, the lock, the log and the key material sit outside it.",
+
+  "keystorePath": "/absolute/path/outside/the/project/keystore.json",
+  "_keystorePath": "Encrypted JSON keystore (ethers / Web3 Secret Storage v3). Decrypted only inside the signing process, only after the policy and chain checks passed. The signer has no export command.",
+
+  "signerMode": "dpapi",
+  "_signerMode": "How the keystore password is obtained, inside the signing process only: dpapi (Windows: a DPAPI CurrentUser blob at unlockPath, the layout tools/wallet.cjs uses) | password-file (unlockPath holds the password; file permissions are the only protection) | keychain (macOS: security find-generic-password -s unlockService [-a unlockAccount] -w) | secret-service (Linux: secret-tool lookup service unlockService).",
+  "unlockPath": "/absolute/path/outside/the/project/password.dpapi",
+  "_unlockPath": "Needed for dpapi and password-file. For keychain and secret-service replace it with \"unlockService\": \"<service name>\" (and, for keychain, optionally \"unlockAccount\").",
+
+  "allowlistPath": "/absolute/path/outside/the/project/r3-allowlist.json",
+  "_allowlistPath": "The policy file. Built by `node signer.cjs allowlist-init` (operator-run), never by the agent.",
+
+  "allowlistSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "_allowlistSha256": "The sha256 of the allowlist file, as printed by allowlist-init (sha256sum / certutil -hashfile give the same value). The signer refuses to check, simulate or sign if the file hashes to anything else.",
+
+  "sendLockPath": "/absolute/path/outside/the/project/r3-signer-send.lock",
+  "_sendLockPath": "The send-lock: taken by every send, declared in every send's output, left behind by a send that could not confirm, cleared only by `node signer.cjs reconcile`. Put this path in the wake wrappers' <signer send-lock> placeholder (I-setup.md I.2 section 7).",
+
+  "logPath": "/absolute/path/outside/the/project/r3-signer.log.jsonl",
+  "_logPath": "Append-only JSON-lines log: broadcast-intent (hash and nonce, written BEFORE the send), broadcast-accepted, confirmed or reverted, receipt-timeout. Never key material, never signed bytes.",
+
+  "receiptTimeoutSec": 120,
+  "receiptPollMs": 2000,
+  "rpcTimeoutMs": 20000,
+  "rpcRetries": 4,
+  "rpcBackoffMs": 1000,
+  "_tuning": "Optional (defaults shown). Reads are retried with exponential back-off on HTTP 429 and 5xx; eth_sendRawTransaction is attempted exactly once, always."
+}

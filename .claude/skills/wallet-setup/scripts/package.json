@@ -1,0 +1,7 @@
+{
+  "name": "agent-wallet-setup-helper",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": { "test": "node wallet.test.cjs" },
+  "dependencies": { "ethers": "6.17.0" }
+}

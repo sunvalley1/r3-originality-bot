@@ -1,0 +1,6 @@
+{
+  "chainId": 10,
+  "rpcUrl": "https://mainnet.optimism.io",
+  "dataFunctionUrl": "https://deep.seer.pm/.netlify/functions/get-originality-r3-v3-markets-data",
+  "signerAddress": "0x0000000000000000000000000000000000000000"
+}

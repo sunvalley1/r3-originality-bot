@@ -1,0 +1,5 @@
+# never committed: run state, and anything that could hold key material
+run/
+*.dpapi
+*.keystore
+keystores/
