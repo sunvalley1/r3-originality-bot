@@ -41,7 +41,7 @@ async function run(ctx) {
   if (!own && !HB.isFinalRun(ctx, rid)) return skip('not final (I-setup.md I.2 section 6): the start-of-run repair finalizes it first');
   if (!ctx.existsRun('base-forecast.json') && !ctx.existsRun('fills.json')) return { result: 'nothing to score', reason: 'no base-forecast.json and no fills.json', review_written: false };
   const bf = ctx.existsRun('base-forecast.json') ? ctx.readRunJson('base-forecast.json') : { forecasts: [] };
-  if (bf.method && bf.method !== 'csv-face-value') throw hstop('other-arm', `base-forecast.json method is ${clip(bf.method, 40)}: not this arm's run-id; never scored by this H`);
+  if (bf.method && !lib.isArmForecastMethod(bf.method)) throw hstop('other-arm', `base-forecast.json method is ${clip(bf.method, 40)}: not this arm's run-id; never scored by this H`);
   const bl = ctx.existsRun('blended.json') ? ctx.readRunJson('blended.json') : { blends: [] };
   const alloc = ctx.existsRun('allocation.json') ? ctx.readRunJson('allocation.json') : { positions: [] };
   const cands = ctx.existsRun('candidates.json') ? ctx.readRunJson('candidates.json').candidates : [];

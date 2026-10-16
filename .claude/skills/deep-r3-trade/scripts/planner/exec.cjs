@@ -498,7 +498,7 @@ function armRunIds(ctx) {
     try {
       if (!ctx.existsRel(`run/${d}/base-forecast.json`) || !ctx.existsRel(`run/${d}/allocation.json`)) continue;
       const bf = JSON.parse(ctx.readRel(`run/${d}/base-forecast.json`).toString('utf8')); const al = JSON.parse(ctx.readRel(`run/${d}/allocation.json`).toString('utf8'));
-      if (bf.method === 'csv-face-value' && al.objective === 'max-ev') out.push(d);
+      if (lib.isArmForecastMethod(bf.method) && al.objective === 'max-ev') out.push(d);
     } catch (e) { /* not this arm's, or unreadable: never touched */ }
   }
   return out;

@@ -306,6 +306,12 @@ mode the plan is built and sent in the same run. In supervised mode only, a plan
 `STALE_APPROVAL` after it was built is re-run from C in the same run-id: a queued ramp is sent first, on its own
 "yes", sUSDS re-read, C–F re-run in the same run-id with the real post-ramp bankroll, and gates 2 and 3 re-presented.
 
+**Research mode** (an operator's configuration, `steps/D-csv-forecast.md` *Research mode*): with `researchPath` in
+`planner.config.json`, D's forecast is a fresh price-blind GPT-6-Astra research every run instead of the CSV, and a
+research failure means no new entry that run. The operator's wrapper `wake-deep-r3.cmd` in the project root then
+runs the installed planner's `wake` directly (no agent in the trading path), twice daily at 11:30 and 21:30 local
+(Task Scheduler task `deep-r3-wake`, 6h time limit), once the five gates of I.2 section 1 are set.
+
 **The CSV is this arm's wrinkle.** It is supplied **once** — by a human, in a session, at setup or in a
 supervised run — and then **stored**: `./run/csv/originality-v<N>-<slug>.csv`, write-once, pointed at by
 `./run/csv/current.json`. Every later wake **loads it and proceeds silently**; none asks for a fresh one and

@@ -21,7 +21,13 @@ const crypto = require('crypto');
 
 const ENTRY_DIR = path.resolve(__dirname, '..'); // the folder holding planner.cjs
 const CONFIG_NAME = 'planner.config.json';
-const CONFIG_KEYS = ['helperPath', 'signerPath', 'projectRoot', 'rpcGapMs', 'parallel'];
+const CONFIG_KEYS = ['helperPath', 'signerPath', 'projectRoot', 'rpcGapMs', 'parallel', 'researchPath', 'researchTimeoutMinutes'];
+
+// The forecast methods of this arm's run-ids (exec.armRunIds, the wake's repair, H): the stored CSV's
+// 'csv-face-value', and a researched forecast (d's research mode, or a supervised run that swapped seer-trade's D in),
+// whose method string starts with RESEARCH_METHOD_PREFIX.
+const RESEARCH_METHOD_PREFIX = 'seer-trade D (D-base-forecast.md) swapped into deep-r3-trade';
+function isArmForecastMethod(m) { return m === 'csv-face-value' || (typeof m === 'string' && m.startsWith(RESEARCH_METHOD_PREFIX)); }
 const HELPER_CONFIG_NAME = 'chain-helper.config.json';
 const ETHERS_VERSION = '6.17.0';
 
@@ -119,6 +125,7 @@ function loadConfig() {
   };
   const rpcGapMs = num('rpcGapMs', 120, 0, 60000);
   const parallel = num('parallel', 1, 1, 8);
+  const researchTimeoutMinutes = num('researchTimeoutMinutes', 75, 5, 240);
 
   // projectRoot: an existing folder (no symlink at the leaf).
   let pst;
@@ -145,7 +152,14 @@ function loadConfig() {
   };
   const helperPath = tool('helperPath');
   const signerPath = tool('signerPath');
-  return Object.freeze({ helperPath, signerPath, projectRoot: projectReal, rpcGapMs, parallel, configFile: file, entryDir: entryReal });
+  // researchPath (optional): the research script d runs in research mode; a regular file outside the project, like the tools.
+  let researchPath = null;
+  if (raw.researchPath !== undefined) {
+    const v = raw.researchPath;
+    if (typeof v !== 'string' || v.length === 0 || v.length > 1024 || v.includes('\0') || !path.isAbsolute(v)) throw cfgErr('researchPath must be an absolute path string');
+    researchPath = tool('researchPath');
+  }
+  return Object.freeze({ helperPath, signerPath, projectRoot: projectReal, rpcGapMs, parallel, researchPath, researchTimeoutMinutes, configFile: file, entryDir: entryReal });
 }
 
 // The holder: the signer address the operator pinned in the helper's own config (chain-helper.config.json next to
@@ -585,7 +599,7 @@ function emitSummary(obj) { process.stdout.write(renderSummary(obj) + '\n'); }
 const stopJson = (s) => ({ step: s.step, cause: s.cause, status: s.status, notes: s.notes });
 
 module.exports = {
-  ENTRY_DIR, CONFIG_NAME, CONFIG_KEYS, EXIT, MAX_OUTPUT_CHARS, ETHERS_VERSION,
+  ENTRY_DIR, CONFIG_NAME, CONFIG_KEYS, EXIT, MAX_OUTPUT_CHARS, ETHERS_VERSION, RESEARCH_METHOD_PREFIX, isArmForecastMethod,
   PlannerError, Stop, ToolFailure,
   lc, sleep, nowIso, nowIsoSec, sha256, clip, isInside, lastJson,
   loadConfig, holderAddress, loadEthers,

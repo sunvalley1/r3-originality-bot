@@ -12,11 +12,20 @@
 // (write-once), rewrites ./run/csv/current.json and writes base-forecast.json.
 // D reads exactly five fields per candidate (market, address, kind, outcomes, parent), never a price, and touches
 // no chain: this module runs no helper and no signer.
+// Research mode (planner.config.json names researchPath; steps/D-csv-forecast.md, *Research mode*): D's forecast is the
+// price-blind research of that script instead of the stored CSV. D then also reads `tradeable`, reads each tradeable
+// child's Reality.eth question state onchain through the helper (price-free) for the workers, runs the script once,
+// checks its research-forecast.json and writes base-forecast.json. A `--supply` CSV still takes the CSV path.
 'use strict';
 
+const cp = require('node:child_process');
 const lib = require('./lib.cjs');
+const TB = require('./table.cjs');
 
 const { Stop, PlannerError, clip, sha256 } = lib;
+const RESEARCH_FILE = 'research-forecast.json';
+const STATE_FILE = 'onchain-state.blind.json';
+const INVALID_ANSWER = '0x' + 'f'.repeat(64);
 const GH = 'https://github.com/';
 const CURRENT = 'run/csv/current.json';
 const VERSION_RE = /^originality-v(\d+)-[A-Za-z0-9._-]+\.csv$/;
@@ -99,6 +108,94 @@ const reportFields = (M) => ({
 
 const dstop = (cause, status, notes, fields = {}) => new Stop({ step: 'D', cause, status, notes, fields });
 
+// ---- research mode. Any failure is the D stop research-failed (status aborted): no base-forecast.json, so the run
+// makes no new entry, and a wake still runs Half B and H (the operator's rule: research fails, skip new trades).
+async function research(ctx, scalar, skippedNonScalar) {
+  const D = ctx.detail;
+  const fail = (notes, fields = {}) => dstop('research-failed', 'aborted', `D research mode: ${notes}; no base-forecast.json written, so this run makes no new entry (a wake still runs Half B and H)`, fields);
+  let tradeable;
+  try {
+    const live = new Set(ctx.readRunJson('candidates.json').candidates.filter((c) => c.tradeable === true).map((c) => c.address));
+    tradeable = scalar.filter((c) => live.has(c.address));
+  } catch (e) { throw fail(`candidates.json is unreadable: ${clip(e.message, 200)}`); }
+  if (!tradeable.length) throw fail('no tradeable candidate to research');
+  ctx.log(`research mode: ${tradeable.length} tradeable scalar candidates of ${scalar.length}`);
+
+  let ran = false; let seconds = null; let answersPosted = null;
+  if (ctx.existsRun(RESEARCH_FILE)) {
+    ctx.log(`research mode: ${ctx.rel(RESEARCH_FILE)} already exists for this run-id; checked and used as is (the script is not run again)`);
+  } else {
+    // the Reality.eth state of each tradeable child's question, price-free, for the workers (D-base-forecast.md step 4)
+    const r1 = await ctx.multicall('reads-d1.json', tradeable.map((c) => ({ to: c.address, signature: 'questionsIds()(bytes32[])' })));
+    const qids = r1.results.map((x) => (Array.isArray(x[0]) && x[0].length >= 1 ? String(x[0][0]) : null));
+    const noQ = tradeable.filter((c, i) => !qids[i]).map((c) => c.market);
+    if (noQ.length) throw fail(`questionsIds() is empty for ${noQ.slice(0, 5).join(', ')}`);
+    const n = qids.length; const R = TB.ADDR.REALITY; const reads = [];
+    for (const sig of ['getFinalizeTS(bytes32)(uint32)', 'getBestAnswer(bytes32)(bytes32)', 'getBond(bytes32)(uint256)', 'isPendingArbitration(bytes32)(bool)']) for (const q of qids) reads.push({ to: R, signature: sig, args: [q] });
+    reads.push({ to: TB.ADDR.MC3, signature: 'getCurrentBlockTimestamp()(uint256)' });
+    const r2 = await ctx.multicall('reads-d2.json', reads);
+    const res = r2.results; const blockTs = Number(res[4 * n][0]);
+    const markets = tradeable.map((c, i) => {
+      const fin = Number(res[i][0]); const ans = String(res[n + i][0]).toLowerCase(); const posted = fin !== 0;
+      let score = null; let label = null;
+      if (posted && ans === INVALID_ANSWER) label = 'INVALID';
+      else if (posted) { try { score = Number(BigInt(ans)) / 1e18; } catch (e) { score = null; } }
+      return { address: c.address, question_id: qids[i], answer_posted: posted, finalize_ts: fin, best_answer: posted ? ans : null, best_answer_score: score, best_answer_label: label, bond_wei: String(res[2 * n + i][0]), pending_arbitration: res[3 * n + i][0] === true };
+    });
+    answersPosted = markets.filter((m) => m.answer_posted).length;
+    ctx.writeRunJson(STATE_FILE, { chain_id: TB.CHAIN_ID, block: r2.block, block_timestamp: blockTs, note: `Read onchain by the planner (Optimism) at block ${r2.block}: each tradeable child's Reality.eth question (Market.questionsIds()[0]) with getFinalizeTS, getBestAnswer, getBond and isPendingArbitration. finalize_ts 0 means no answer has been posted; a posted answer is the 0-100 score x 1e18 (best_answer_score), or INVALID.`, markets });
+    ctx.log(`research mode: Reality state of ${n} questions read at block ${r2.block}; ${answersPosted} with an answer posted; wrote ${ctx.rel(STATE_FILE)}`);
+
+    // the research script: it prepares the price-free inputs, runs the workers and writes research-forecast.json
+    const t0 = Date.now(); ran = true;
+    const args = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', ctx.cfg.researchPath, '-ProjectRoot', ctx.cfg.projectRoot, '-RunId', ctx.runId, '-NodeExe', process.execPath];
+    ctx.log(`research mode: running ${ctx.cfg.researchPath} (time limit ${ctx.cfg.researchTimeoutMinutes} min)`);
+    const r = cp.spawnSync('powershell.exe', args, { cwd: ctx.cfg.projectRoot, encoding: 'utf8', windowsHide: true, timeout: ctx.cfg.researchTimeoutMinutes * 60000, maxBuffer: 1 << 24 });
+    seconds = Math.round((Date.now() - t0) / 1000);
+    const timedOut = !!(r.error && r.error.code === 'ETIMEDOUT');
+    D.research_run = { exit: r.status, timed_out: timedOut, error: r.error ? clip(r.error.message, 200) : null, seconds, stdout_tail: String(r.stdout || '').slice(-2000), stderr_tail: String(r.stderr || '').slice(-2000) };
+    ctx.log(`research mode: the script ended after ${seconds} s, exit ${r.status}${timedOut ? ' (timed out)' : ''}`);
+    if (r.error || r.status !== 0) throw fail(`the research script failed (${timedOut ? `timed out after ${ctx.cfg.researchTimeoutMinutes} min` : r.error ? clip(r.error.message, 200) : `exit ${r.status}`}): ${clip(String(r.stderr || r.stdout || '').trim().split('\n').slice(-3).join(' | '), 400)}`, { research_seconds: seconds });
+  }
+
+  // the checks: what E, F and H rely on, before anything is written
+  let rf;
+  try { rf = ctx.readRunJson(RESEARCH_FILE); } catch (e) { throw fail(`${ctx.rel(RESEARCH_FILE)} is missing or unreadable: ${clip(e.message, 200)}`); }
+  const bad = [];
+  if (!rf || rf.price_seen !== false) bad.push(`price_seen is ${JSON.stringify(rf && rf.price_seen)}, not false`);
+  if (!rf || !lib.isArmForecastMethod(rf.method) || rf.method === 'csv-face-value') bad.push(`method does not start with "${lib.RESEARCH_METHOD_PREFIX}"`);
+  const byAddr = new Map();
+  for (const f of (rf && Array.isArray(rf.forecasts) ? rf.forecasts : [])) {
+    const a = String(f && f.address).toLowerCase();
+    if (byAddr.has(a)) bad.push(`duplicate address ${a}`);
+    byAddr.set(a, f);
+    const p = f && f.p;
+    if (!Array.isArray(p) || p.length !== 3 || !p.every((x) => typeof x === 'number' && Number.isFinite(x) && x >= 0 && x <= 1)) { bad.push(`${a}: p is malformed`); continue; }
+    if (Math.abs(p[0] + p[1] + p[2] - 1) > 1e-9) bad.push(`${a}: p sums to ${p[0] + p[1] + p[2]}`);
+    if (!(p[2] > 0) || f.invalid_p !== p[2]) bad.push(`${a}: invalid_p ${f.invalid_p} is not p[2] ${p[2]} above 0`);
+    if (typeof f.market !== 'string' || !f.market) bad.push(`${a}: market is empty`);
+  }
+  const missing = tradeable.filter((c) => !byAddr.has(c.address)).map((c) => c.market);
+  const known = new Set(tradeable.map((c) => c.address)); const extra = [...byAddr.keys()].filter((a) => !known.has(a));
+  if (missing.length) bad.push(`no forecast for ${missing.length} tradeable candidate(s): ${missing.slice(0, 5).join(', ')}`);
+  if (extra.length) bad.push(`${extra.length} forecast(s) for an address that is not a tradeable candidate`);
+  if (bad.length) throw fail(`${ctx.rel(RESEARCH_FILE)} failed D's checks: ${bad.slice(0, 5).join('; ')}${bad.length > 5 ? ` (+${bad.length - 5} more)` : ''}`, { problems: bad.length });
+
+  const forecasts = tradeable.map((c) => {
+    const f = byAddr.get(c.address);
+    return { market: f.market, address: c.address, p: f.p.slice(), invalid_p: f.invalid_p, sums_to_one: true, reasoning: f.reasoning, sources: f.sources, would_change_my_mind: f.would_change_my_mind };
+  });
+  ctx.writeRunJson('base-forecast.json', { generated_at: lib.nowIsoSec(), method: rf.method, price_seen: false, forecasts });
+  ctx.log(`research mode: wrote ${ctx.rel('base-forecast.json')}: ${forecasts.length} forecasts, price_seen false, method from ${ctx.rel(RESEARCH_FILE)}`);
+  return {
+    source: 'research',
+    forecasts: forecasts.length,
+    research: { ran, seconds, file: ctx.rel(RESEARCH_FILE), answers_posted: answersPosted, not_tradeable: scalar.length - tradeable.length },
+    skipped_not_scalar: skippedNonScalar,
+    artifacts: [ctx.rel('base-forecast.json'), ...(ran ? [ctx.rel(STATE_FILE), ctx.rel(RESEARCH_FILE)] : [])],
+  };
+}
+
 async function run(ctx) {
   const D = ctx.detail;
   const supply = ctx.opts.supply;
@@ -125,6 +222,9 @@ async function run(ctx) {
   if (new Set(scalar.map((c) => c.market)).size !== scalar.length) refuse.push('duplicate market string among candidates');
   if (scalar.length === 0) refuse.push('no scalar rows');
   if (refuse.length) throw dstop('candidates-refused', 'aborted', `D step 1: candidates.json failed D's assertions, nothing written: ${refuse.slice(0, 5).join('; ')}`, { problems: refuse.length });
+
+  // research mode (operator configuration): the forecast comes from the research script, not the CSV store
+  if (ctx.cfg.researchPath && supply === undefined) return research(ctx, scalar, skippedNonScalar);
 
   // ---------------------------------------------------------------- step 2: get the CSV (never re-ask)
   const csvNames = ctx.listRunDir('csv');

@@ -7,3 +7,7 @@ keystores/
 # the private key is pasted here once, converted, then removed
 .env
 .env.*
+
+# kept on this PC only: scratch files of the first run, and the original skill download
+archive/
+r3-originality-skills (1)/

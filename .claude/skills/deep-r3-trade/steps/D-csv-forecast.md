@@ -10,6 +10,22 @@ same 98 markets and compares. **The rule is deliberate: a trader who wants it ch
 agent does not change it on its own initiative.** One deviation from the interface is mandated and it is
 listed in step 5; everything else is transcription.
 
+## Research mode (an operator's change to this step)
+
+An operator who wants a researched forecast instead of the CSV names `researchPath` (and optionally
+`researchTimeoutMinutes`, default 75) in `planner.config.json`: the installed copy of `../scripts/research/research.ps1`,
+outside the project. Then `node <planner path> d <run-id>` (and the wake's D) does not read the CSV store: it reads the
+Reality.eth state of each tradeable child onchain (price-free) into `onchain-state.blind.json`, runs the script once,
+which prepares the price-blind inputs of `../../seer-trade/reference/price-blind-worker.md`, runs one fresh Codex
+worker per part (GPT-6-Astra, reasoning effort xhigh, live web search, workspace-write sandbox with no shell
+network, the user's Codex config and plugins ignored) on `../../seer-trade/steps/D-base-forecast.md`, and merges the
+parts into `research-forecast.json`; D checks it (price_seen false, every tradeable candidate once, each `p` summing to
+1 with Invalid above 0) and writes `base-forecast.json` with that method, whose string starts with
+`seer-trade D (D-base-forecast.md) swapped into deep-r3-trade` (the prefix by which F, Half B, H and the repair
+recognize this arm's research-based run-ids). Any failure is the D stop `research-failed`: no `base-forecast.json`,
+no new entry that run, and a wake still runs Half B and H. `--supply` still takes the CSV path. Without `researchPath`
+nothing below changes.
+
 ## Input / Output
 
 - **INPUT:** `./run/<run-id>/candidates.json` (from `C-select.md`), plus **the CSV** — the one the human

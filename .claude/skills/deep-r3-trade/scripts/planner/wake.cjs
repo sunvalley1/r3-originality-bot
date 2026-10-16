@@ -53,7 +53,7 @@ function repairCandidates(ctx) {
     try {
       if (!ctx.existsRel(`run/${d}/inflight.json`) && !ctx.existsRel(`run/${d}/inflight.settled.json`)) continue;
       if (!ctx.existsRel(`run/${d}/base-forecast.json`) || ctx.existsRel(`run/${d}/allocation.json`)) continue;
-      if (JSON.parse(ctx.readRel(`run/${d}/base-forecast.json`).toString('utf8')).method === 'csv-face-value') ids.push(d);
+      if (lib.isArmForecastMethod(JSON.parse(ctx.readRel(`run/${d}/base-forecast.json`).toString('utf8')).method)) ids.push(d);
     } catch (e) { /* not this arm's, or unreadable: never touched */ }
   }
   return ids;
