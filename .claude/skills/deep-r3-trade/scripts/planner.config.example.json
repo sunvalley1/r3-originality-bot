@@ -5,5 +5,5 @@
   "rpcGapMs": 120,
   "parallel": 1,
   "researchPath": "<optional: absolute path of the installed research\\research.ps1, outside the project; leave the key out to forecast from the stored CSV>",
-  "researchTimeoutMinutes": 75
+  "researchTimeoutMinutes": 160
 }

@@ -16,7 +16,7 @@ $triggers = @($At | ForEach-Object { New-ScheduledTaskTrigger -Daily -At $_ })
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -StartWhenAvailable -WakeToRun -ExecutionTimeLimit (New-TimeSpan -Hours $TimeLimitHours)
 $user = [Security.Principal.WindowsIdentity]::GetCurrent().Name
 $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
-Register-ScheduledTask -TaskName 'deep-r3-wake' -Description 'deep-r3-trade: GPT-6-Astra research, plan and trades on the 98 Deep Funding Round 3 Originality markets (wake-deep-r3.cmd)' -Action $action -Trigger $triggers -Settings $settings -Principal $principal -Force | Out-Null
+Register-ScheduledTask -TaskName 'deep-r3-wake' -Description 'deep-r3-trade: Opus 5.5 + GPT-6-Astra research, plan and trades on the 98 Deep Funding Round 3 Originality markets (wake-deep-r3.cmd)' -Action $action -Trigger $triggers -Settings $settings -Principal $principal -Force | Out-Null
 $t = Get-ScheduledTask -TaskName 'deep-r3-wake'
 $i = $t | Get-ScheduledTaskInfo
 Write-Output ("registered deep-r3-wake: state {0}, runs at {1}, next run {2}" -f $t.State, ($At -join ' and '), $i.NextRunTime)

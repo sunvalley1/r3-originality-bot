@@ -307,8 +307,10 @@ mode the plan is built and sent in the same run. In supervised mode only, a plan
 "yes", sUSDS re-read, C–F re-run in the same run-id with the real post-ramp bankroll, and gates 2 and 3 re-presented.
 
 **Research mode** (an operator's configuration, `steps/D-csv-forecast.md` *Research mode*): with `researchPath` in
-`planner.config.json`, D's forecast is a fresh price-blind GPT-6-Astra research every run instead of the CSV, and a
-research failure means no new entry that run. The operator's wrapper `wake-deep-r3.cmd` in the project root then
+`planner.config.json`, D's forecast is a fresh price-blind research every run instead of the CSV, by the model that
+`R3_RESEARCH_MODEL` names (`opus`: Claude Opus 5.5; `astra`: GPT-6-Astra). Each scheduled slot is two runs from the
+same wallet, `<slot>-1-opus` first and then `<slot>-2-astra`, each trading on its own model's forecast. A research failure
+means no new entry in that run. The operator's wrapper `wake-deep-r3.cmd` in the project root then
 runs the installed planner's `wake` directly (no agent in the trading path), twice daily at 11:30 and 21:30 local
 (Task Scheduler task `deep-r3-wake`, 6h time limit), once the five gates of I.2 section 1 are set.
 

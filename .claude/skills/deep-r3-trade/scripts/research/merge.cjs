@@ -1,13 +1,19 @@
 // research/merge.cjs - checks the workers' parts of one run-id's research and merges them, values untouched, into
 // run/<run-id>/research-forecast.json (the planner's d step checks it again and writes base-forecast.json).
-// Usage: node merge.cjs <project root> <run-id> <work dir> <model> <effort>
+// Usage: node merge.cjs <project root> <run-id> <work dir> <model> <effort> [tool]
+// tool is how the workers ran, for the method string: codex (the default, GPT-6-Astra) or claude (Claude Opus 5.5).
 // Exit 0, or 1 with every problem on stderr (then nothing is written and the run makes no new entry).
 'use strict';
 const fs = require('node:fs');
 const path = require('node:path');
 
-const [PROJECT, RID, WORK, MODEL, EFFORT] = process.argv.slice(2);
-if (!PROJECT || !RID || !WORK || !MODEL || !EFFORT) { console.error('merge: usage: node merge.cjs <project> <run-id> <work dir> <model> <effort>'); process.exit(1); }
+const [PROJECT, RID, WORK, MODEL, EFFORT, TOOL = 'codex'] = process.argv.slice(2);
+if (!PROJECT || !RID || !WORK || !MODEL || !EFFORT) { console.error('merge: usage: node merge.cjs <project> <run-id> <work dir> <model> <effort> [tool]'); process.exit(1); }
+const HOW = {
+  codex: `Codex CLI exec, reasoning effort ${EFFORT}, live web search, workspace-write sandbox with no shell network, no user config or plugins`,
+  claude: `Claude Code print mode, effort ${EFFORT}, restricted: no shell, file tools confined to the worker folder, market and explorer sites blocked for WebFetch, no user settings, CLAUDE.md, plugins, hooks or MCP`,
+}[TOOL];
+if (!HOW) { console.error(`merge: tool must be codex or claude, not ${TOOL}`); process.exit(1); }
 // keep in step with the planner's lib.cjs RESEARCH_METHOD_PREFIX: it is how this arm recognizes its own run-ids
 const PREFIX = 'seer-trade D (D-base-forecast.md) swapped into deep-r3-trade';
 const runDir = path.join(PROJECT, 'run', RID);
@@ -56,7 +62,7 @@ const forecasts = order.map((a) => byAddr.get(a));
 if (forecasts.some((f) => !f)) { console.error('merge: a candidate has no forecast after the merge'); process.exit(1); }
 const out = {
   generated_at: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
-  method: `${PREFIX} by the planner's research mode (one letter swapped: D; E identity, F max-ev, G mint-and-trade unchanged). Researched price-blind by ${partDirs.length} fresh no-history ${MODEL} workers (Codex CLI exec, reasoning effort ${EFFORT}, live web search, workspace-write sandbox with no shell network, no user config or plugins) through reference/price-blind-worker.md, from this run-id's candidates.blind.json, question-policy.blind.json and onchain-state.blind.json; merged without changing any value. Parts: ${methods.join(' | ')} calib=none`,
+  method: `${PREFIX} by the planner's research mode (one letter swapped: D; E identity, F max-ev, G mint-and-trade unchanged). Researched price-blind by ${partDirs.length} fresh no-history ${MODEL} workers (${HOW}) through reference/price-blind-worker.md, from this run-id's candidates.blind.json, question-policy.blind.json and onchain-state.blind.json; merged without changing any value. Parts: ${methods.join(' | ')} calib=none`,
   price_seen: false,
   forecasts,
 };

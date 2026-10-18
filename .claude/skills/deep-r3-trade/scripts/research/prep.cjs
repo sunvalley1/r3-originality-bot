@@ -1,5 +1,7 @@
 // research/prep.cjs - the price-blind inputs of one run-id's research (research mode of the planner's d step).
-// Usage: node prep.cjs <project root> <run-id> <research dir> <work dir> <parts>
+// Usage: node prep.cjs <project root> <run-id> <research dir> <work dir> <parts> [task template]
+// The task template is a file name in <research dir> (default TASK.template.md, the Codex workers' brief;
+// TASK.claude.template.md is the Claude workers' brief).
 //
 // Reads run/<run-id>/candidates.json (the tradeable scalar rows, through the allowlist of
 // seer-trade/reference/price-blind-worker.md), <research dir>/question-policy.blind.json (the immutable onchain
@@ -11,11 +13,13 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
-const [PROJECT, RID, RESEARCH, WORK, PARTS_ARG] = process.argv.slice(2);
+const [PROJECT, RID, RESEARCH, WORK, PARTS_ARG, TEMPLATE_ARG] = process.argv.slice(2);
 const fail = (msg) => { console.error('prep: ' + msg); process.exit(1); };
-if (!PROJECT || !RID || !RESEARCH || !WORK || !PARTS_ARG) fail('usage: node prep.cjs <project> <run-id> <research dir> <work dir> <parts>');
+if (!PROJECT || !RID || !RESEARCH || !WORK || !PARTS_ARG) fail('usage: node prep.cjs <project> <run-id> <research dir> <work dir> <parts> [task template]');
 const PARTS = Number(PARTS_ARG);
 if (!Number.isInteger(PARTS) || PARTS < 1 || PARTS > 16) fail('parts must be an integer 1..16');
+const TEMPLATE = TEMPLATE_ARG || 'TASK.template.md';
+if (!/^TASK(\.[a-z]+)?\.template\.md$/.test(TEMPLATE)) fail(`task template must be a TASK*.template.md file name, not ${TEMPLATE}`);
 const runDir = path.join(PROJECT, 'run', RID);
 const readJson = (p) => JSON.parse(fs.readFileSync(p, 'utf8').replace(/^﻿/, ''));
 const writeJson = (p, v) => { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, JSON.stringify(v, null, 2) + '\n', 'utf8'); };
@@ -62,7 +66,7 @@ for (const c of rows) if (!stBy.has(lc(c.address))) fail(`${c.market}: no onchai
 const docsDir = path.join(RESEARCH, 'docs');
 const docs = ['D-base-forecast.md', 'price-blind-worker.md', 'seer-protocol-scalar-triple.md', 'seer-markets-resolution-policy.pdf'];
 for (const d of docs) if (!fs.existsSync(path.join(docsDir, d))) fail(`missing ${path.join(docsDir, d)}`);
-const template = fs.readFileSync(path.join(RESEARCH, 'TASK.template.md'), 'utf8');
+const template = fs.readFileSync(path.join(RESEARCH, TEMPLATE), 'utf8');
 const size = Math.ceil(rows.length / PARTS);
 const priceWords = /\b(price|prices|priced|odds|quote|quotes|volume|tvl)\b/i;
 const today = new Date().toISOString().slice(0, 10);

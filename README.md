@@ -4,17 +4,25 @@ A bot that trades the 98 **Deep Funding Round 3 "Originality"** prediction marke
 [deep.seer.pm](https://deep.seer.pm) (Seer, on the Optimism chain). Each market asks for one GitHub repo's average
 originality score (0 to 100), and you can buy UP or DOWN on each one.
 
+Two research models take turns, both trading from the same wallet. Each scheduled slot makes two runs:
+- first **`<slot>-1-opus`**, which trades on the forecast of seven **Claude Opus 5.5** workers (through Claude Code,
+  max effort, no shell, market sites blocked);
+- then **`<slot>-2-astra`**, which trades on the forecast of seven **GPT-6-Astra** workers (through the Codex CLI,
+  reasoning effort Extra high, live web search).
+
+Each run writes its own report, so the two models' results can be compared.
+
 Each run does the following:
 
-1. **Research.** Seven GPT-6-Astra workers (through the Codex CLI, reasoning effort Extra high, live web search)
-   forecast all 98 repos without seeing the market prices.
+1. **Research.** Its model forecasts all 98 repos without seeing the market prices. If the research fails, that run
+   makes no new trades; the other model's run still goes ahead.
 2. **Compare and size.** The planner compares each forecast with the pool price and sizes the bets for the highest
    expected value. Thin pools mean small bets: runs so far staked between about 15 and 100 sUSDS.
 3. **Trade.** It mints, trades, merges and redeems through a **signer that only signs calls on its allowlist**.
 4. **Report.** It writes everything under `run/<run-id>/`, including `report.md`.
 
-On the original machine it runs **twice a day from Windows Task Scheduler** (11:30 and 21:30), with no AI agent in the
-trading path. You can also run it by hand from Claude Code, which then asks for a "yes" before each batch is sent.
+On the original machine it runs **twice a day from Windows Task Scheduler** (11:30 and 21:30), Opus first and then
+Astra in each slot, with no AI agent in the trading path (the models only research). You can also run it by hand from Claude Code, which then asks for a "yes" before each batch is sent.
 
 > Real money, experimental software. Use a wallet made only for this bot, and fund it with what you can afford to lose.
 
@@ -24,7 +32,7 @@ trading path. You can also run it by hand from Claude Code, which then asks for 
 |---|---|
 | `.claude/skills/deep-r3-trade/` | The skill: `SKILL.md` (overview), `steps/` (the method, steps C to I), `scripts/` (planner, chain helper, signer, research, and their tests) |
 | `.claude/skills/seer-trade/`, `seer-protocol/`, `evm-onchain/`, `wallet-setup/` | Supporting skills: the reasoned arm for other Seer markets, how Seer works onchain, Optimism addresses and gas, the encrypted-wallet tool |
-| `wake-deep-r3.cmd` | The scheduled run, started by Task Scheduler |
+| `wake-deep-r3.cmd` | The scheduled slot (an Opus run, then an Astra run), started by Task Scheduler |
 | `register-deep-r3-wake.ps1` | Registers that task (11:30 and 21:30 by default) |
 | `r3.cmd` | Runs planner commands by hand on Node 22 |
 | `tools/` | Read-only helpers: book status, an independent second-RPC check, who swapped in our pools, merging research parts, watching a send |
@@ -44,10 +52,11 @@ Three tools are installed **outside** the project folder, and each one refuses t
   funds only to your `owner` address.
 - **Planner** (`planner.cjs` and `planner/`): runs steps C to H, calling the helper for every read and the signer for every send.
 
-A scheduled run goes like this: Task Scheduler starts `wake-deep-r3.cmd`, which checks its lock and the tools' hashes,
-then runs `planner wake <run-id>`. The planner then:
+A scheduled slot goes like this: Task Scheduler starts `wake-deep-r3.cmd`, which checks its lock and the tools' hashes,
+then runs `planner wake <slot>-1-opus` with `R3_RESEARCH_MODEL=opus` and, once that finishes, `planner wake <slot>-2-astra`
+with `R3_RESEARCH_MODEL=astra` (the research script reads that variable). In each run the planner:
 1. repairs anything an earlier run left unfinished;
-2. selects the markets (C), does the research (D) and blends it with the prices (E);
+2. selects the markets (C), does the research (D) and sets it beside the prices unchanged (E);
 3. converts any USDC to sUSDS (PSM3);
 4. sizes the bets (F), builds the plan (G) and sends it (exec);
 5. merges and redeems settled positions (Half B), then scores them (H);
@@ -60,7 +69,9 @@ then runs `planner wake <run-id>`. The planner then:
 - Windows 10 or 11, and [Git](https://git-scm.com).
 - **Node.js 22 LTS**, not 24. Node 24 crashes on exit on Windows, which makes a transaction that landed look like a
   failure. The portable zip from nodejs.org is fine.
-- [Claude Code](https://claude.com/claude-code), for setup and supervised runs.
+- [Claude Code](https://claude.com/claude-code), for setup, supervised runs and the Opus 5.5 research workers. Install
+  it with npm (`npm install -g @anthropic-ai/claude-code`) and sign in once with `claude auth login`. The research step
+  runs the npm install's `claude.exe`.
 - The **Codex desktop app**, signed in with a ChatGPT plan that offers GPT-6-Astra. The research step uses its bundled
   `codex.exe` from `%LOCALAPPDATA%\OpenAI\Codex\bin\`.
 - A **new wallet just for this bot**, with on Optimism:
@@ -89,7 +100,7 @@ then runs `planner wake <run-id>`. The planner then:
    | Chain helper | `%USERPROFILE%\r3-tools\` | Copy `chain-helper.cjs`. Copy `chain-helper.config.example.json` as `chain-helper.config.json` and set `signerAddress` to your bot wallet. Run `npm init -y`, then `npm install ethers@6.17.0`. Check it from the project folder with `node %USERPROFILE%\r3-tools\chain-helper.cjs chain-id`, which should print `"ok":true`. |
    | Signer | `%USERPROFILE%\.r3-signer-bin\` | Run `npm install ethers@6.17.0 --save-exact`. Copy `signer.cjs`. Fill in `signer.config.json` from `signer.config.example.json`. Run `node signer.cjs allowlist-init --skill-dir <project>\.claude\skills\deep-r3-trade` and put the printed hash in `allowlistSha256`. Check that `node signer.cjs info` shows `allowlist_hash_matches: true`, then run the self-test (signer README section 7). |
    | Planner | `%USERPROFILE%\r3-tools\planner\` | Copy `planner.cjs` and the whole `planner\` folder. Fill in `planner.config.json` from `planner.config.example.json`. Run `npm init -y`, then `npm install ethers@6.17.0 --save-exact`. |
-   | Research | `%USERPROFILE%\r3-tools\research\` | Copy everything in `scripts\research\`, and set `researchPath` in `planner.config.json` to this folder's `research.ps1`. |
+   | Research | `%USERPROFILE%\r3-tools\research\` | Copy everything in `scripts\research\`. In `planner.config.json`, set `researchPath` to this folder's `research.ps1` and `researchTimeoutMinutes` to 160 (an Opus research may take up to 150 minutes). |
 
 3. **Change the machine-specific lines** listed in the next section.
 
@@ -123,9 +134,9 @@ edits, because they take every path from the config files above.
 | File | Line | What it holds now | Change it to |
 |---|---|---|---|
 | `r3.cmd` | 7 | The Node 22 path and the planner path | Your `node.exe` (Node 22) and your `...\r3-tools\planner\planner.cjs` |
-| `wake-deep-r3.cmd` | 12 | `set "NODE=..."` (the Node 22 path) | Your `node.exe` (Node 22) |
-| `wake-deep-r3.cmd` | 22 | The signer's send-lock path | The `sendLockPath` from your `signer.config.json` |
-| `wake-deep-r3.cmd` | 23 | The signer's log path | The `logPath` from your `signer.config.json` |
+| `wake-deep-r3.cmd` | 15 | `set "NODE=..."` (the Node 22 path) | Your `node.exe` (Node 22) |
+| `wake-deep-r3.cmd` | 25 | The signer's send-lock path | The `sendLockPath` from your `signer.config.json` |
+| `wake-deep-r3.cmd` | 26 | The signer's log path | The `logPath` from your `signer.config.json` |
 | `tools/indep-check.cjs` | 4 | `require('C:/Users/12/r3-tools/node_modules/ethers')` | Your `.../r3-tools/node_modules/ethers` |
 | `tools/r3-status.cjs` | 4 | The same `ethers` path | Your `.../r3-tools/node_modules/ethers` |
 | `tools/r3-status.cjs` | 7 | `HOLDER` = the original bot wallet | Your bot wallet address, in lower case |
