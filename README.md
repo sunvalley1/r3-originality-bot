@@ -11,7 +11,9 @@ It never forecasts on its own, and it does not depend on which AI runs it. Any A
 files and run commands (Claude Code, Codex or another) can do the setup and the supervised runs; the scheduled runs use
 no AI at all.
 
-> **Write-ups wanted.** Seer will open write-ups on setting up this trading bot, with **$1,000 for the best write-up**.
+> **Strategy write-ups wanted.** Seer will open write-ups on trading strategies built on this bot, with **$1,000 for
+> the best one**. Running the base bot unchanged doesn't qualify: change a step (`.claude/skills/deep-r3-trade/steps/`)
+> and show what it did.
 
 Each run does the following:
 
