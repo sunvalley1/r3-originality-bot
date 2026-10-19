@@ -11,3 +11,6 @@ keystores/
 # kept on this PC only: scratch files of the first run, and the original skill download
 archive/
 r3-originality-skills (1)/
+
+# your own forecast CSVs (the stored copies live under run/csv/, also ignored)
+inputs/
