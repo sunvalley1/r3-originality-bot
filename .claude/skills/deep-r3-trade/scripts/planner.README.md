@@ -556,18 +556,22 @@ node planner.test.cjs --skip-offline --live --helper <chain-helper.cjs> --signer
 
 ## 9. Verification record
 
-The hashes and the offline suite are from 2026-10-08. The live read-only smoke is from 2026-10-06, on earlier versions
-of some files (below). Everything ran with Node v22.7.0 and ethers 6.17.0, on Windows. Any edit to a file changes its
-hash; re-run the tests after one.
+The table holds the sha256 of each file as git stores it (LF line endings), as of 2026-10-19. A Windows checkout with
+`core.autocrlf` writes CRLF, which changes a raw hash, so normalize line endings before you compare. (The fingerprint a
+setup records, `autonomy.planner_sha256`, is the raw hash of that machine's installed `planner.cjs`.) The first bullet
+below is the 2026-10-19 record. The others are older: the offline suite and the fork rehearsal from 2026-10-08, and the
+live read-only smoke from 2026-10-06, on earlier versions of some files. The 2026-10-08 files are the ones in this
+repository's first commit. Everything ran on Windows with `ethers` 6.17.0, on Node v22.7.0 up to 2026-10-08 and
+v22.23.3 on 2026-10-19. Any edit to a file changes its hash; re-run the tests after one.
 
-| File | sha256 |
+| File | sha256 (LF line endings) |
 |---|---|
-| `planner.cjs` | `9be719f7f97897fb3f75117fb5fec375f4b1d4a93e5e7fbeb69a5385d85d9ca3` |
+| `planner.cjs` | `d46f49bd70ef1cd2c1f890c0e175312e7f686ef37ca331eaa883227228783e09` |
 | `planner/c.cjs` | `970aecb2021a56246fdf2423572a14f73cf7a90387b5fd6e2d2adb30eb48dc91` |
 | `planner/d.cjs` | `de804f3937052d7c418e3672d0ce527d05784c1ab2a01d1c94fe2e21c0d3ac28` |
 | `planner/e.cjs` | `72b99c27dea8c075b533336386b93dac4991b15c9a66ceef2449a866266afae2` |
-| `planner/exec-core.cjs` | `685983f9edfb10f0ffeba8e989a9a092f8752915365fd660d4813a426bc09441` |
-| `planner/exec.cjs` | `e0e1b49a891fb45f02399543e37e1db6b603f68667b5c9cb024b4ba9fe443708` |
+| `planner/exec-core.cjs` | `f6d701b7516d308199009efa1ffd8f3b21f8f446966d3e61885a4c91fb1f61c6` |
+| `planner/exec.cjs` | `981b17b2306d2763d2deb0481f311325f149b87255f1b886dfaf5e2b43f70fc5` |
 | `planner/f-engine.cjs` | `54135dbde54f07904396962996582f2860f59c86391373e810947144577cf2c5` |
 | `planner/f-lib.cjs` | `e05fa6f31a2763a29f6ecff5e10a2f155e29be83b690807f15b50b72e62232b0` |
 | `planner/f-plan.cjs` | `0453a1bdb78cb3fb2e4a1401e3abbf9f78418648835d7c4840c870d2c856fd0f` |
@@ -584,18 +588,24 @@ hash; re-run the tests after one.
 | `planner/g-read.cjs` | `9c2ef0ba358eeece76a5864f6a5ce6b4839d1ab62082682e08352d7fb76ef7d4` |
 | `planner/g-verify.cjs` | `f39039008d9260e7e97729947858c4cc04606606a8f6268c33975d4474b625ad` |
 | `planner/g.cjs` | `2e90acb6edee64e3cbd4f2bd1606adc8eb2a666535862742298c75f8c62a8738` |
-| `planner/h.cjs` | `a7561748c1d6f6817b70a179b06845a8e1dec4c60ea03dc061e9a97ab389fee6` |
-| `planner/halfb.cjs` | `cbd3aee55b279ef866f5435b8695f75e965ab607a0aa4ec933e3b2d6feab5124` |
-| `planner/lib.cjs` | `fecc7ee9b7f51446de6fcc442da76d941e676085949160e8a237ee39ad18e16b` |
+| `planner/h.cjs` | `775f68189c74cd7a576df4cd9868a3be1218d26ec0b1f3771361a1fa4cad2eae` |
+| `planner/halfb.cjs` | `f469de4b846564af34e12ecc301adb723853bb4aed3deb182348529d9b91e55d` |
+| `planner/lib.cjs` | `df9e12d78ac50a82661c58a335f708acb57295a1e5c944af2538f88956c9589f` |
 | `planner/ramp.cjs` | `dc14003d7085f958d81a47fa2369dc94203c17c593340e4d154fd8691a8da086` |
-| `planner/report.cjs` | `ea334629c6b79eccfd53d6239acda2c789ba73af0de5259ce4e0a354d3d5c8e9` |
+| `planner/report.cjs` | `2497231ceac4454ad47f7693990a7508793a461c0c2b00445da92dbc6b25edbb` |
 | `planner/table.cjs` | `4d4e00d9e90c9840dd7ac67e20e027ce9547ce989c8a4b402b424bd16083280d` |
-| `planner/wake.cjs` | `6b3b88e153b49f5746ff9f58fbd3b83c2a9630d823e1be4fdcc6658f3921de1f` |
+| `planner/wake.cjs` | `151db4074f1ed2296231c43ad5a5af318f8abd36c71119e35c0020bc86e60120` |
 | `planner.config.example.json` | `09487aedcb7340ab2dc543c424db467480883614bfbd79fe0a7ce9d699dac354` |
 | `planner.test.cjs` | `88bd2ac47bf5add17fbeb496075f81a33a855d10744c86ae7e2c9f5d3fbe93eb` |
 
+- **2026-10-19, the CSV base skill.** Only `lib.cjs`, `exec.cjs`, `h.cjs` and `wake.cjs` differ from the 2026-10-08
+  files: they also accept run-ids whose forecast was researched (`lib.isArmForecastMethod`: seer-trade's D swapped in,
+  or an earlier research add-on), so Half B, H and the wake's repair still see the positions those runs opened. The
+  suite has no case of its own for such a run-id. **Offline**, `node planner.test.cjs --dir <scratch>` with `NODE_PATH`
+  naming `ethers` 6.17.0: **117 passed, 0 failed, 1 skipped** (the symlinked-config case, as below), exit
+  code 0, 7091 s, on exactly the files hashed above (up to line endings), none of them modified during the run.
 - **Offline**, `node planner.test.cjs --dir <scratch>` (`ethers` 6.17.0 in a parent folder's `node_modules`; no
-  `NODE_PATH` needed): **117 passed, 0 failed, 1 skipped**, exit code 0, 3579 s, on exactly the files hashed above (checked before
+  `NODE_PATH` needed): **117 passed, 0 failed, 1 skipped**, exit code 0, 3579 s, on the 2026-10-08 files (checked before
   and after the run). Added on 2026-10-07: TradeExecutor (`executor-session-key`) is refused before any helper or
   signer call by `exec-core`'s `presend` and `broadcast`, by `exec` (`--check` included), by `halfb --send` and by `wake`.
   Only that value refuses: `local-encrypted-eoa`, `eip7702`, `other-agent-signer`, a missing `signer_mode` and a missing
@@ -622,7 +632,7 @@ hash; re-run the tests after one.
   before the parent mint, an `M = 0` plan); the merge-arb (6 pairs on held child Invalid, its 3b remainder, the
   cross-run Invalid row, every effect exact); the wake's PSM3 ramp (USDC and USDS converted before F, a capacity stop),
   `f --provisional`; the five gates; a Half B affordability skip; the once-only re-plan and the cut plan.
-- **Fork rehearsal of the scheduled path** (2026-10-08, on exactly the files hashed above). The setup:
+- **Fork rehearsal of the scheduled path** (2026-10-08, on the 2026-10-08 files). The setup:
   - a local anvil fork of Optimism mainnet at block 157,912,851, on loopback;
   - a throwaway holder funded on the fork with 50 sUSDS, 20 USDC and 1 ETH;
   - the installed helper, signer and planner, with the signer's real allowlist;
