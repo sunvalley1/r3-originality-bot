@@ -1,14 +1,12 @@
 @echo off
 rem wake-deep-r3.cmd - the scheduled run of deep-r3-trade, started by the Task Scheduler task deep-r3-wake at 11:30 and
 rem 21:30 local time through "conhost --headless" (as the SeerBot tasks are). It is the reference wrapper of
-rem .claude\skills\deep-r3-trade\steps\I-setup.md I.2 section 7 with two changes. Instead of `claude -p`, it runs the
-rem installed planner's `wake` itself, so no agent is in the trading path. And it runs that wake twice per slot, once
-rem per research model, both trading from the same wallet: first run <slot>-1-opus (Claude Opus 5.5 research), then
-rem <slot>-2-astra (GPT-6-Astra research). R3_RESEARCH_MODEL tells the research script (planner.config.json
-rem researchPath) which model to run. The lock's owner stage stays "claude-p": that is the planner's name for the
-rem scheduled wrapper's lock. Between the two runs the wrapper renames the run-id the lock names; both runs keep the
-rem slot's started_at, so one time limit of 6h covers the slot (the task's -ExecutionTimeLimit, the age test below and
-rem setup schedule.time_limit_hours are one number).
+rem .claude\skills\deep-r3-trade\steps\I-setup.md I.2 section 7 with one change: instead of `claude -p`, it runs the
+rem installed planner's `wake` itself, once, so no agent is in the trading path. The planner's d step reads the stored
+rem forecast CSV (run\csv\current.json, supplied by a human in a supervised session; with none stored the run makes no
+rem new entry and this wrapper exits 5). The lock's owner stage stays "claude-p":
+rem that is the planner's name for the scheduled wrapper's lock. Time limit 6h (the task's -ExecutionTimeLimit, the age
+rem test below and setup schedule.time_limit_hours are one number).
 setlocal
 cd /d "%~dp0" || exit /b 1
 if not exist run mkdir run
@@ -19,8 +17,8 @@ mkdir run\.lock.deep-r3-trade 2>> run\wake-deep-r3.log || (
   if exist run\.lock.deep-r3-trade\ ( echo [%DATE% %TIME%] lock held, skipping >> run\wake-deep-r3.log ) else ( echo [%DATE% %TIME%] lock not taken: mkdir failed, error above - check the account's access to run >> run\wake-deep-r3.log )
   exit /b 2
 )
-rem the wrapper chooses the slot (the UTC slug) and the first run-id, <slot>-1-opus (numbered so run-ids sort in run order; -w2 if that directory exists), and records both in the owner file
-powershell -NoProfile -Command "$p=(Get-CimInstance Win32_Process -Filter ('ProcessId=' + $PID)).ParentProcessId; $n=(Get-Date).ToUniversalTime(); $s=$n.ToString('yyyy-MM-dd\THHmm') + 'Z'; $r=$s + '-1-opus'; if (Test-Path ('run\' + $r)) { $r += '-w2' }; [ordered]@{pid=$p; process_start_time=(Get-Process -Id $p).StartTime.ToUniversalTime().ToString('o'); host=$env:COMPUTERNAME; started_at=$n.ToString('o'); stage='claude-p'; run_id=$r; slot=$s} | ConvertTo-Json -Compress | Set-Content -Encoding ascii run\.lock.deep-r3-trade\owner.txt"
+rem the wrapper chooses the run-id (the UTC slug, -w2 if that directory exists) and records it in the owner file
+powershell -NoProfile -Command "$p=(Get-CimInstance Win32_Process -Filter ('ProcessId=' + $PID)).ParentProcessId; $n=(Get-Date).ToUniversalTime(); $r=$n.ToString('yyyy-MM-dd\THHmm') + 'Z'; if (Test-Path ('run\' + $r)) { $r += '-w2' }; [ordered]@{pid=$p; process_start_time=(Get-Process -Id $p).StartTime.ToUniversalTime().ToString('o'); host=$env:COMPUTERNAME; started_at=$n.ToString('o'); stage='claude-p'; run_id=$r} | ConvertTo-Json -Compress | Set-Content -Encoding ascii run\.lock.deep-r3-trade\owner.txt"
 rem leftover signer send-lock (the signer's sendLockPath): log it, never delete it - the signer's own reconcile owns it
 for %%L in ("C:\Users\12\.r3-signer-state\r3-signer-send.lock") do if exist "%%~L" echo [%DATE% %TIME%] leftover signer send-lock %%~L, not deleted >> run\wake-deep-r3.log
 echo [%DATE% %TIME%] signer log "C:\Users\12\.r3-signer-state\r3-signer.log.jsonl" >> run\wake-deep-r3.log
@@ -33,31 +31,14 @@ if errorlevel 1 ( rmdir /s /q run\.lock.deep-r3-trade & exit /b 4 )
 rem live supervised sessions: write the run-ids whose session-owner.json marker is live (pid alive, start time within 2 seconds of process_start_time) to run\.lock.deep-r3-trade\live-runs.txt, one per line, always created; an unreadable or malformed marker counts as live and is logged; if the check cannot run: log it, write wake-status aborted with the reason and exit 4 without starting the run
 powershell -NoProfile -Command "$ErrorActionPreference='Stop'; $o=Get-Content run\.lock.deep-r3-trade\owner.txt -Raw | ConvertFrom-Json; $why=''; $live=@(); try { foreach ($d in Get-ChildItem -LiteralPath run -Directory) { $f=Join-Path $d.FullName 'session-owner.json'; if (-not (Test-Path -LiteralPath $f -PathType Leaf)) { continue }; $isl=$true; try { $m=Get-Content -LiteralPath $f -Raw | ConvertFrom-Json; $q=[string]$m.pid; if ($m.pid -is [string] -or $q -notmatch '^\d+$') { throw 'bad pid' }; $t=[DateTimeOffset]::Parse([string]$m.process_start_time, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AssumeUniversal).UtcDateTime; $g=Get-Process -Id ([int]$q) -ErrorAction SilentlyContinue; if (-not $g -or [math]::Abs(($g.StartTime.ToUniversalTime() - $t).TotalSeconds) -gt 2) { $isl=$false } } catch { [Console]::Error.WriteLine('[' + (Get-Date).ToUniversalTime().ToString('o') + '] unreadable session-owner.json: ' + $f + ', treated as live') }; if ($isl) { $live += $d.Name } }; [IO.File]::WriteAllLines((Join-Path (Get-Location).Path 'run\.lock.deep-r3-trade\live-runs.txt'), [string[]]$live) } catch { $why='live-run check failed: ' + $_ }; if ($why) { New-Item -ItemType Directory -Force ('run\' + $o.run_id) | Out-Null; [ordered]@{run_id=$o.run_id; started_at=$o.started_at; status='aborted'; notes=$why + '; run not started (wrapper live-run check)'} | ConvertTo-Json -Compress | Set-Content -Encoding ascii ('run\' + $o.run_id + '\wake-status.json'); [Console]::Error.WriteLine('[' + (Get-Date).ToUniversalTime().ToString('o') + '] ' + $why + ', run not started'); exit 4 }" 2>> run\wake-deep-r3.log
 if errorlevel 1 ( rmdir /s /q run\.lock.deep-r3-trade & exit /b 4 )
-rem the planner both runs use
-set "PLANNER="
-for /f "usebackq delims=" %%P in (`powershell -NoProfile -Command "(Get-Content run\setup.deep-r3-trade.json -Raw | ConvertFrom-Json).autonomy.planner_path"`) do set "PLANNER=%%P"
-call :runone opus
-set "RC_OPUS=%RC%"
-rem the second run: the owner file now names <slot>-2-astra (-w2 if that directory exists); pid, start time, started_at and stage stay
-powershell -NoProfile -Command "$f='run\.lock.deep-r3-trade\owner.txt'; $o=Get-Content $f -Raw | ConvertFrom-Json; $r=[string]$o.slot + '-2-astra'; if (Test-Path ('run\' + $r)) { $r += '-w2' }; $o.run_id=$r; $o | ConvertTo-Json -Compress | Set-Content -Encoding ascii $f"
-call :runone astra
-set "RC_ASTRA=%RC%"
-rmdir /s /q run\.lock.deep-r3-trade
-rem the task's result: the Opus run's exit code if it is not 0, else the Astra run's
-set "RC=%RC_OPUS%"
-if "%RC%"=="0" set "RC=%RC_ASTRA%"
-echo [%DATE% %TIME%] slot finished: opus exit %RC_OPUS%, astra exit %RC_ASTRA%, task exit %RC% >> run\wake-deep-r3.log
-exit /b %RC%
-
-rem one run (call :runone opus or :runone astra): the installed planner's wake, exactly once, in the foreground, on that
-rem model's research. It checks the five gates, repairs earlier run-ids, runs Half A (C, D with the research, E, the
-rem PSM3 ramp, F, G and the sends), Half B and H, and writes report.md and the final wake-status.json. Its one-line
-rem summary goes to run\wake-deep-r3-out.json. Sets RC.
-:runone
-set "R3_RESEARCH_MODEL=%~1"
+rem the run: the installed planner's wake, exactly once, in the foreground. It checks the five gates, repairs earlier
+rem run-ids, runs Half A (C, D on the stored CSV, E, the PSM3 ramp, F, G and the sends), Half B and H, and writes
+rem report.md and the final wake-status.json. Its one-line summary goes to run\wake-deep-r3-out.json.
 set "RID="
+set "PLANNER="
 for /f "usebackq delims=" %%R in (`powershell -NoProfile -Command "(Get-Content run\.lock.deep-r3-trade\owner.txt -Raw | ConvertFrom-Json).run_id"`) do set "RID=%%R"
-echo [%DATE% %TIME%] run %RID%: planner wake started (%R3_RESEARCH_MODEL% research) >> run\wake-deep-r3.log
+for /f "usebackq delims=" %%P in (`powershell -NoProfile -Command "(Get-Content run\setup.deep-r3-trade.json -Raw | ConvertFrom-Json).autonomy.planner_path"`) do set "PLANNER=%%P"
+echo [%DATE% %TIME%] run %RID%: planner wake started >> run\wake-deep-r3.log
 "%NODE%" "%PLANNER%" wake %RID% > run\wake-deep-r3-out.json 2>> run\wake-deep-r3.log
 set RC=%ERRORLEVEL%
 echo [%DATE% %TIME%] run %RID%: planner wake exited %RC% >> run\wake-deep-r3.log
@@ -68,5 +49,6 @@ powershell -NoProfile -Command "$r='%RID%'; $w='run\' + $r + '\wake-status.json'
 rem final status no-csv or csv-store-mismatch: exit 5. Notes naming turn/time budget exhausted or RESIZE SCHEDULE: exit 6. Each only when the planner and the checks above exited 0
 powershell -NoProfile -Command "$r='%RID%'; try { $j=Get-Content ('run\' + $r + '\wake-status.json') -Raw -ErrorAction Stop | ConvertFrom-Json; if ($j.status -in 'no-csv','csv-store-mismatch') { exit 5 } } catch { }" || if %RC%==0 set RC=5
 powershell -NoProfile -Command "$r='%RID%'; try { $j=Get-Content ('run\' + $r + '\wake-status.json') -Raw -ErrorAction Stop | ConvertFrom-Json; if ([string]$j.notes -match 'turn/time budget exhausted|RESIZE SCHEDULE') { exit 6 } } catch { }" || if %RC%==0 set RC=6
+rmdir /s /q run\.lock.deep-r3-trade
 echo [%DATE% %TIME%] run %RID% finished, exit %RC% >> run\wake-deep-r3.log
-goto :eof
+exit /b %RC%

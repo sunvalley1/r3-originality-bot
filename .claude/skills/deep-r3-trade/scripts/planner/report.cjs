@@ -61,9 +61,7 @@ async function run(ctx) {
   L.push('## Half A (today\'s entry)', '');
   const step = (name, s, ok) => L.push(`- **${name}**: ${!s ? 'not run' : s.ok === false || s.stop ? stopText(s) : ok(s)}`);
   step('C', c, (s) => `candidates.json, ${s.candidates} rows (${s.tradeable} tradeable), source ${s.source}`);
-  step('D', d, (s) => (s.source === 'research'
-    ? `base-forecast.json, ${s.forecasts} forecasts from price-blind research (${s.research && s.research.ran ? `run this step, ${s.research.seconds} s` : 'research-forecast.json already present'}; ${s.research && s.research.answers_posted} question(s) with an answer posted)`
-    : `base-forecast.json, ${s.forecasts} forecasts from CSV v${s.csv && s.csv.version} (${s.csv && s.csv.reused ? 'reused' : 'new'}; matched ${s.csv && s.csv.counts.matched}, no forecast ${s.csv && s.csv.counts.no_forecast})`));
+  step('D', d, (s) => `base-forecast.json, ${s.forecasts} forecasts from CSV v${s.csv && s.csv.version} (${s.csv && s.csv.reused ? 'reused' : 'new'}; matched ${s.csv && s.csv.counts.matched}, no forecast ${s.csv && s.csv.counts.no_forecast})`);
   step('E', e, (s) => `blended.json, ${s.blends} blends (identity)`);
   if (rp) step('PSM3 ramp', rp, (s) => (s.ran ? `sent before F: ${s.assets.map((a) => `${a.amount_in} ${a.asset} (quote ${a.quote_susds} sUSDS, floor ${a.min_amount_out})`).join(', ')}; sUSDS ${s.susds_before} -> ${s.susds_after}; record ${s.record}` : s.reason));
   step('F', f, (s) => `allocation.json, ${s.rows} rows on ${s.markets_with_rows} markets; staked ${s.staked_M} sUSDS of bankroll ${s.bankroll}${s.provisional ? ' (PROVISIONAL: sUSDS + PSM3 minAmountOut of the queued ramp)' : ''}; EV ${s.expected_value}${s.ramp_due && !s.provisional ? '; USDC or USDS still held at F: sized on the sUSDS balance alone (the wake sends the ramp before F; a supervised session sends it on its own yes)' : ''}`);

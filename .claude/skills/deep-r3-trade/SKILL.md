@@ -306,14 +306,6 @@ mode the plan is built and sent in the same run. In supervised mode only, a plan
 `STALE_APPROVAL` after it was built is re-run from C in the same run-id: a queued ramp is sent first, on its own
 "yes", sUSDS re-read, C–F re-run in the same run-id with the real post-ramp bankroll, and gates 2 and 3 re-presented.
 
-**Research mode** (an operator's configuration, `steps/D-csv-forecast.md` *Research mode*): with `researchPath` in
-`planner.config.json`, D's forecast is a fresh price-blind research every run instead of the CSV, by the model that
-`R3_RESEARCH_MODEL` names (`opus`: Claude Opus 5.5; `astra`: GPT-6-Astra). Each scheduled slot is two runs from the
-same wallet, `<slot>-1-opus` first and then `<slot>-2-astra`, each trading on its own model's forecast. A research failure
-means no new entry in that run. The operator's wrapper `wake-deep-r3.cmd` in the project root then
-runs the installed planner's `wake` directly (no agent in the trading path), twice daily at 11:30 and 21:30 local
-(Task Scheduler task `deep-r3-wake`, 6h time limit), once the five gates of I.2 section 1 are set.
-
 **The CSV is this arm's wrinkle.** It is supplied **once** — by a human, in a session, at setup or in a
 supervised run — and then **stored**: `./run/csv/originality-v<N>-<slug>.csv`, write-once, pointed at by
 `./run/csv/current.json`. Every later wake **loads it and proceeds silently**; none asks for a fresh one and
@@ -492,7 +484,7 @@ before the v3 pools were seeded (2026-10-01); the live v3 book differs.
   to a score* — reasonable, since never-evaluated is carried by the middle, where the repo token pays 0. With "buy
   any side that clears", it means that on any sub-1 market the CSV scores at all, at least one side would pass, and
   where both sides would pass, merge-arb or 3b has already bought the pairs, so the directional pass adds at most one side — a
-  bet that the child does not resolve INVALID, funded at the size max-EV likes. 36 of the 98 markets sit below
+  position on the child not resolving INVALID, funded at the size max-EV likes. 36 of the 98 markets sit below
   `1 − f` (2026-10-01). Together with the sweep, this is the baseline's largest single exposure and it is never
   named in its own artifacts; the two residual risks are shown in the plan print.
 - **Stranded repo tokens.** `M = min(free sUSDS after the ramp, max_j (cap_j − held_j)⁺)` leaves repo tokens
@@ -506,7 +498,7 @@ before the v3 pools were seeded (2026-10-01); the live v3 book differs.
   run's `merge-arb` consumes it).
 - **And the one that subsumes the rest:** with `w = 1` and max-EV sizing, **a wrong CSV is expressed at full
   size** — nothing stands between the human's number and the trade to damp it. CSV 0.85 against a book of
-  0.7366 bets whatever the sub-1 sweep leaves of that market's own repo-token budget on 0.85, with somebody
+  0.7366 stakes whatever the sub-1 sweep leaves of that market's own repo-token budget on 0.85, with somebody
   informed on the other side. That loss is the measurement: a `review.json` Brier worse than the market's is the entire point of
   running this arm.
 
