@@ -1,15 +1,19 @@
 # planner: the executable form of steps C to H for `deep-r3-trade`
 
 The scheduled (autonomous) run has no `node -e` (`steps/I-setup.md` I.2 section 7), and the work of a run does not fit a
-model's hand inside `--max-turns`: on the first live run F alone made 354 helper calls and 782 quotes, and G encoded and
+model's hand inside one session's turns: on the first live run F alone made 354 helper calls and 782 quotes, and G encoded and
 checked 278 transactions. The planner is a reviewed, hash-pinned tool, like the chain helper and the signer, that does
 that computation; the model drives it and reads its one-line summaries. **The skill text stays the authority**: each
 subcommand performs one step the skill defines, in the skill's order and with its stop rules. Its modules are ported
 from the scripts that built and sent the first live run on Optimism mainnet (278 transactions in 74 groups, every
 group's balance effects equal to the plan); the math is theirs, parameterized, not rewritten.
 
-It ships in the skill's `scripts/` folder; the operator **reads it in full and installs a copy** (section 2); the agent
-does not install or edit it.
+It ships in the skill's `scripts/` folder; the operator **reads it in full and installs a copy** (section 2), or a
+routine's `node r3.cjs install` lays the copy down from the repository, at the commit the routine's prompt pins, and
+reports whether it matches the setup record's path and hash. `r3.cjs trade` refuses (exit 4) unless the record pins
+exactly this install's planner and signer and the installed `planner.config.json` names that signer and helper, and
+it runs this install's planner, never a path from a record. The agent does not edit it. "The wrapper" below is the scheduled run's driver: `node r3.cjs trade` (`routine.cjs`), which takes
+the arm lock with `owner.txt` stage `claude-p` and runs `wake` once (`steps/I-setup.md` I.2 §7).
 
 | File | What it is |
 |---|---|
@@ -17,7 +21,8 @@ does not install or edit it.
 | `planner/lib.cjs` | the pinned config, the inside-project refusal, path confinement, the helper and signer runners (pacing, transient re-runs), the summary, the arm lock |
 | `planner/table.cjs` | the fixed scope: the 98 rows and three bundle headers of `steps/C-select.md` "The fixed 98", the contract addresses, the parent's and middles' condition ids (the test compares it with the skill text) |
 | `planner/c.cjs` | `c`: C-select |
-| `planner/d.cjs` | `d`: D-csv-forecast (stored CSV, or a supervised `--supply`) |
+| `planner/blind.cjs` | `blind`: the price-free Reality.eth state of each tradeable question that the AI research's workers read |
+| `planner/d.cjs` | `d`: D-forecast, by the configured method: the stored CSV (`csv`), a forecast file (`forecast-file`), or a supervised `--supply` |
 | `planner/e.cjs` | `e`: E-no-reconcile (the identity blend) |
 | `planner/f.cjs`, `f-read.cjs`, `f-engine.cjs`, `f-plan.cjs`, `f-probe-post3a.cjs`, `f-verify.cjs`, `f-print.cjs`, `f-lib.cjs` | `f`: F-max-ev (read, plan, probe, verify, print; the exact single-range Uniswap v3 math) |
 | `planner/g.cjs`, `g-read.cjs`, `g-build.cjs`, `g-verify.cjs`, `g-emit.cjs`, `g-audit.cjs`, `g-indep.cjs`, `g-lib.cjs` | `g`: G's build (read with drift report, build, verify, emit, audit) |
@@ -59,7 +64,7 @@ does not install or edit it.
 
 ## 2. Install (operator, once)
 
-1. Pick a folder **outside the project folder** and outside every `Write` or `Edit` path the wrapper grants, for example
+1. Pick a folder **outside the project folder** and outside every `Write` or `Edit` path a run grants, for example
    `~/r3-tools/planner/` (`%USERPROFILE%\r3-tools\planner\` on Windows).
 2. Copy `planner.cjs` and the whole `planner/` folder into it (keep the layout: `planner.cjs` next to `planner/`). Copy
    `planner.config.example.json` next to it as **`planner.config.json`** and fill it in (section 3).
@@ -71,8 +76,8 @@ does not install or edit it.
    - Windows: `certutil -hashfile <file> SHA256`, or PowerShell `Get-FileHash -Algorithm SHA256 <file>`
    - macOS: `shasum -a 256 <file>`
    - Linux: `sha256sum <file>`
-5. As for the signer, install the folder read-only for the account the wake runs as, with the operating system's own
-   file permissions.
+5. In a routine, `node r3.cjs install` writes it fresh at every run from the pinned commit, not read-only, with
+   `ethers` 6.17.0 from the npm registry (`steps/I-setup.md` I.1 section 7, *The hash pins one file*).
 6. Run it from the **project root**: `node <planner path> <subcommand> <run-id> [flags]`. Every `./run/...` path is
    relative to the current folder, and the planner refuses any other current folder.
 7. Smoke test: the live read-only smoke of section 7 runs `c`, `d`, `e` and `f` through the installed helper and never
@@ -87,6 +92,8 @@ does not install or edit it.
 | `projectRoot` | yes | absolute path of the project folder the wake runs in; the current folder must be this folder |
 | `rpcGapMs` | no | the spacing between two helper or signer starts, 0 to 60000 ms, default 120 |
 | `parallel` | no | how many helper or signer processes may run at once, 1 to 8, default 1 (sequential) |
+| `forecastMethod` | no | D's method (`steps/D-forecast.md`): `csv`, the default, reads the stored CSV; `forecast-file` reads a forecast file that any source wrote (`ai` is its first name and still works) |
+| `forecastMaxAgeHours` | no | under `forecast-file`, how old the newest forecast file under `./run/` may be, 1 to 72 hours, default 12 |
 
 Any other key is an error, and so is the example file as shipped (its placeholders are not absolute paths).
 
@@ -121,11 +128,39 @@ error field, a malformed shape, a 2.7 or 2.8 failure, no HTTP response) takes th
 {"subcommand":"c","run_id":"<run-id>","ok":true,"exit":0,"stop":null,"source":"body","body_refused":null,"candidates":98,"tradeable":98,"not_tradeable":0,"bundle_split":"33 / 33 / 32","reason_counts":{"body_not_open":0,"pool_null":0,"liq_zero":0,"payoutReported":0,"pending":0,"decided_unreported":0,"middle_settled":0,"future_finalize":0},"not_tradeable_rows":[],"freshness":"196/196 exact","diagnostics_failed":[],"block_timestamp":1791294003,"multicall_blocks":{"reads.json":157847606,"reads-p1.json":157847607,"reads-p2a.json":157847608,"reads-p2b.json":157847610,"reads-x1.json":157847611,"reads-b1.json":157847612,"reads-b2.json":157847613},"artifacts":["run/<run-id>/candidates.json","run/<run-id>/r3-data.json","run/<run-id>/reads.json","run/<run-id>/reads-p1.json","run/<run-id>/reads-p2a.json","run/<run-id>/reads-p2b.json","run/<run-id>/reads-x1.json","run/<run-id>/reads-b1.json","run/<run-id>/reads-b2.json"],"detail":"run/<run-id>/planner/c.json"}
 ```
 
-### `d <run-id>` and `d <run-id> --supply <csv> [--continue] [--notes <text>]`: D-csv-forecast
+### `blind <run-id>`: the price-free input of an AI research run-id
 
-Without `--supply`: the stored CSV (D step 2, case 2), D's structural checks only, nothing hashed, `base-forecast.json`.
+After `c` on the same run-id: from `candidates.json` it reads four fields per row (`market`, `address`, `kind`,
+`tradeable`), never a price; for each tradeable scalar child it reads the Reality.eth question
+(`Market.questionsIds()[0]`) and its `getFinalizeTS`, `getBestAnswer`, `getBond` and `isPendingArbitration`, in two
+multicalls through the helper, and writes `onchain-state.blind.json` (a posted answer as `best_answer_score`, 0 to 100,
+or `best_answer_label` `INVALID`). It writes no forecast and runs no signer. `scripts/ai-forecast/prep.cjs` then
+builds the research workers' folders from it (`steps/D-methods/ai-research.md`).
+
+```json
+{"subcommand":"blind","run_id":"<run-id>","ok":true,"exit":0,"stop":null,"questions":98,"answers_posted":0,"block":158529912,"artifacts":["run/<run-id>/onchain-state.blind.json"],"detail":"run/<run-id>/planner/blind.json"}
+```
+
+### `d <run-id>` and `d <run-id> --supply <csv> [--continue] [--notes <text>]`: D-forecast
+
+**Method `forecast-file`** (`forecastMethod` `forecast-file`, or `ai`, its first name), without `--supply`: this run-id's
+own `research-forecast.json` if it has one, else the newest one under `./run/*/` made within `forecastMaxAgeHours`,
+copied in byte for byte; a file whose `generated_at` is not an ISO 8601 UTC timestamp is skipped. Any source may write
+it: the AI research, another model, a script, a pool of forecasters. D checks it (`price_seen` false, a `method` text
+saying how it was made, `generated_at` an ISO 8601 UTC timestamp, each `p` three numbers in [0, 1] summing to 1 with
+Invalid above 0, one row per address, each row's market naming C's repo; a refusal names rows by index and markets by
+C's names, never the file's own strings) and writes `base-forecast.json` with C's
+market strings and the file's method, marked as this arm's (`lib.FORECAST_FILE_MARK` in front, unless it already
+carries that mark or the older `lib.RESEARCH_METHOD_PREFIX`), so F, Half B, H and the repair know the run-id; a
+candidate without a row gets no forecast. None young enough is the D stop `no-forecast` (status `no-forecast`); a
+malformed one, `forecast-refused` (status `aborted`). The summary's `source` is `forecast-file`, with a `forecast_file`
+block (`file`, `from_run_id`, `generated_at`, `age_hours`, `method`, `method_sha256`, `no_forecast`, `ignored_rows`).
+`wake-status.json` carries `from_run_id`, `generated_at`, `age_hours`, `method_sha256` and `no_forecast` as
+`forecast_file`, and `report.md` the method's sha256: neither carries the method's text.
+
+**Method `csv`**, the default, without `--supply`: the stored CSV (`steps/D-methods/csv.md` step 2, case 2), D's structural checks only, nothing hashed, `base-forecast.json`.
 No CSV ever provided is the D stop `no-csv` (status `no-csv`); a pointer that does not resolve is `csv-store-mismatch`.
-With `--supply` (a supervised session only): a `.csv` file named relative to the project root; it prints step 5's
+With `--supply` (a supervised session only): a `.csv` file named relative to the project root; it prints `steps/D-methods/csv.md` step 5's
 report and stores nothing (`awaiting-continue`, exit 3) until the human's "continue" is given as `--continue`; then it
 writes the version file write-once, rewrites `./run/csv/current.json` (with `--notes` as its `notes`) and writes
 `base-forecast.json`. A matched count of 0 is refused even with `--continue`. D reads five fields per candidate and
@@ -329,7 +364,7 @@ in that run-id's `recovery.json` gets its row the same way. Once every nonce of 
 a send, it applies the recovery rule (section 6) to each half-done group, some but not all of its transactions landed
 by `exec-state.json` against `g-plan.json` and no recovery settled it, in that run-id under the wrapper's lock, and
 finalizes the run-id once nothing of it is half-done (completed, unwound, nothing to unwind, or kept because the
-boundary allows neither trading nor merging); otherwise it names the group and leaves the run-id not final. Then Half A: `c`, `d` on the stored CSV, `e`, **the PSM3 ramp** of any
+boundary allows neither trading nor merging); otherwise it names the group and leaves the run-id not final. Then Half A: `c`, `d` by the configured method (`forecastMethod`: the stored CSV, or a forecast file), `e`, **the PSM3 ramp** of any
 USDC and USDS at the holder (`planner/ramp.cjs`, I.1 section 5: per asset a quote, the capacity gate
 `sUSDS.balanceOf(PSM3)` read before the group and again right before the swap, an exact approve, `swapExactIn` with `minAmountOut = quote x 9999 / 10000`; simulated in one
 request, policy-checked, sent through exec-core like every send, the run's first broadcast; its record `ramp.json` and its
@@ -341,7 +376,7 @@ every later `exec` gets `replanned`; if the rebuilt plan fails again, `g` cuts i
 it are sent, the failing one and every later one written skipped) and the status stays `traded` or `nothing-to-do`
 (exit 3, cause `stale-simulation`). After the run's first broadcast (a ramp) `g` cuts at once. Then Half B and H on this
 arm's run-ids holding fills, within the time budget; then `report`, which writes the final `wake-status.json`. A C or D
-stop ends Half A only (D4): Half B and H still run, and the final status is `aborted`, `no-csv` or `csv-store-mismatch`.
+stop ends Half A only (D4): Half B and H still run, and the final status is `aborted`, `no-csv`, `csv-store-mismatch` or `no-forecast` (`forecast-refused` ends `aborted`).
 A Half B stop that leaves no nonce open (an affordability skip, say) keeps the status and exits 3 (`half-b-stop`); a
 Half B group it left part-way is named in `notes` and `report.md`. An `exec` that leaves a keep-whole group half-done
 (its `half_done`: nonce settled, and the recovery rule it applied in the same run did not complete or unwind the group)
@@ -364,7 +399,7 @@ summary and detail file as when it runs alone (the ramp's is `planner/ramp.json`
 | 0 | ok | |
 | 1 | an internal error of the planner (a bug); the summary says so | `internal` |
 | 2 | usage or config, or a tool that refused its own config, arguments or paths | `usage`, `bad_run_id`, `bad_argument`, `config_missing`, `config_malformed`, `config_inside_project`, `config_cwd_mismatch`, `ethers_missing`, `ethers_version`, `path_*` |
-| 3 | a stop the skill defines: a C or D stop, a stale plan, a refusal, an affordability skip | `tool-failure`, `signer-refused`, `identity-check-failed`, `upstream-set-changed`, `onchain-reads-failed`, `run-id-used`, `no-csv`, `csv-store-mismatch`, `awaiting-continue`, `price-seen`, `self-check-failed`, `broadcast-started`, `allowlist-refused`, `boundary`, `stale-boundary`, `simulation-failed`, `stale-simulation`, `dual-leg-infeasible`, `merge-arb-infeasible`, `stale-invalid`, `stale-susds`, `stale-floor`, `stale-balance`, `effects-mismatch`, `gas-limit`, `gas-grew`, `affordability-skip`, `time-budget`, `psm3-capacity`, `autonomy-gate`, `prior-stop`, `changed-since-print`, `unsupported-signer-mode` (signer mode (b), refused by every send path and by the wake: section 8); the wake's `half-a-stop`, `half-done`, `half-b-stop`, `aborted` |
+| 3 | a stop the skill defines: a C or D stop, a stale plan, a refusal, an affordability skip | `tool-failure`, `signer-refused`, `identity-check-failed`, `upstream-set-changed`, `onchain-reads-failed`, `run-id-used`, `no-csv`, `csv-store-mismatch`, `no-forecast`, `forecast-refused`, `awaiting-continue`, `price-seen`, `self-check-failed`, `broadcast-started`, `allowlist-refused`, `boundary`, `stale-boundary`, `simulation-failed`, `stale-simulation`, `dual-leg-infeasible`, `merge-arb-infeasible`, `stale-invalid`, `stale-susds`, `stale-floor`, `stale-balance`, `effects-mismatch`, `gas-limit`, `gas-grew`, `affordability-skip`, `time-budget`, `psm3-capacity`, `autonomy-gate`, `prior-stop`, `changed-since-print`, `unsupported-signer-mode` (signer mode (b), refused by every send path and by the wake: section 8); the wake's `half-a-stop`, `half-done`, `half-b-stop`, `aborted` |
 | 4 | a safety refusal | `nonce-moved`, `pending-transaction`, `hash-mismatch`, `lock-held`, `lock-lost`, `pending`, `inflight-unsettled`, `signer-changed`, `holder-mismatch`, `not-scheduled` |
 | 5 | a transport failure after the re-runs | `rpc_unreachable` (C), `transport` |
 
@@ -464,7 +499,11 @@ in process (a cancel at `from_block` + 40,000 found across five settlements of a
 once, none skipped, `nonce-attempts.json` unchanged), H's cost basis in process (the first live run's complex-buy rows:
 `x` counted once, the hand-computed P&L for UP, DOWN and INVALID)), `pipeline` (c, d, e, f, g, `exec --check`, exec, halfb, h,
 report on one run-id, each summary's shape, writes only where allowed), `c-variants` (C's stops and its onchain
-rebuild, a transport failure to exit 5), `g-safety` and `exec-safety` (nonce moved, pending transaction, hash
+rebuild, a transport failure to exit 5), `forecast-file` (D's forecast-file method: `blind`'s price-free Reality.eth
+reads, the config's method and age bounds with `ai` accepted, no forecast file or only a stale one to the `no-forecast`
+stop, a fresh one in another run-id copied byte for byte with its free-text method marked as this arm's and read by E, a
+run-id's own file used whatever its age, a file with the older mark kept as is under `ai` and both marks recognized,
+five malformed ones refused, `--supply` still storing a CSV, and a wake ending `no-forecast`), `g-safety` and `exec-safety` (nonce moved, pending transaction, hash
 mismatch, a refused check, the gas check at send time, affordability, `--max-groups`, a send throttled before signing
 re-run with one attempt per nonce, a pre-send `simulate` still throttled after its re-runs to exit 5, its
 `rpc-transport`, `rpc-http` 503 and plain `rpc-error` answers to exit 5 and a `-38xxx` one to exit 3, nothing sent;
@@ -545,30 +584,41 @@ node planner.test.cjs --skip-offline --live --helper <chain-helper.cjs> --signer
 - **A day-2 plan with no sUSDS is not empty.** F step 6 gives each market the budget `held_j + M`, where `held_j` is the
   repo token held plus the bundle's unsplit tokens that earlier runs left; with `M = 0`, F still sizes rows on the
   markets whose `held_j` is above 0.
-- **Where the skill text names the planner**: `steps/I-setup.md` I.2 §7, *The planner*: its allow rule
-  (`Bash(node <planner path> wake *)` and the `PowerShell` twin, in both wrappers: `wake` only; a supervised session
-  runs the other subcommands, each call prompting the human), its hash record (`planner`, with
-  `autonomy.planner_path` and `autonomy.planner_sha256`, which both wrappers check before `claude -p`), the
-  `needs-planner` blocker and its clearance (`c`, then `d`, `e`, `f`, `g` and `exec --check` on a dry run), the tool
-  timeout of the `wake` call, and the wake prompt's single `wake` call. `wake` sends the PSM3 ramp itself (between `e`
-  and `f`); a scheduled prompt cannot drive the steps one by one instead of calling `wake` (its allow entries permit
-  `wake` alone), and the planner has no ramp subcommand.
+- **Where the skill text names the planner**: `steps/I-setup.md` I.2 §7, *The planner*: the trading routine's tool
+  entries (`Bash(node r3.cjs install)`, `Bash(node r3.cjs trade --push)` and `Bash(node r3.cjs status)` allowed,
+  beside `Read`, the exact `Bash(cd /home/user/<trading repo>)` when two repositories are attached, and the exact
+  pin check `Bash(git diff --quiet --no-ext-diff --no-textconv <commit> HEAD -- . ':(exclude)run')`;
+  `Bash(node r3.cjs planner *)` and `Bash(node r3.cjs planner)` denied, with the rest of that section's list:
+  `r3.cjs trade` runs `wake` only; a supervised session runs the other subcommands, `node r3.cjs planner …`, each
+  call prompting the human), its hash record (`planner`, with `autonomy.planner_path` and `autonomy.planner_sha256`,
+  which `r3.cjs trade` checks before the wake, the path included), the code pin in the trading routine's prompt (the
+  commit `node r3.cjs install` copies the planner from), the `needs-planner` blocker and its clearance (`c`, then
+  `d`, `e`, `f`, `g --indep` and `exec --check` on a dry run, which `node r3.cjs clearance` runs and records in
+  `run/<run-id>/clearance.json`; it passes only on `check-passed`), the tool timeout of the `r3.cjs trade` call, and
+  its single `wake` call. `wake` sends the PSM3 ramp itself (between `e` and `f`). The trading routine is kept from
+  driving the steps one by one instead of calling `wake` by its denied entries, auto mode's classifier for any
+  variant on neither list, the agent's instructions, and `r3.cjs`'s own refusal of `exec` without `--check`,
+  `halfb --send` and `wake` wherever `R3_KEYSTORE_JSON` or `R3_KEYSTORE_PASSWORD` is set. That refusal is keyed on
+  those variables and on `r3.cjs planner`: the installed planner run directly, or `r3.cjs` with the variables unset,
+  gets round it, so it is one layer, not a wall. The planner has no ramp subcommand.
 
 ## 9. Verification record
 
-The table holds the sha256 of each file as git stores it (LF line endings), as of 2026-10-19. A Windows checkout with
+The table holds the sha256 of each file as git stores it (LF line endings), as of 2026-10-23. A Windows checkout with
 `core.autocrlf` writes CRLF, which changes a raw hash, so normalize line endings before you compare. (The fingerprint a
-setup records, `autonomy.planner_sha256`, is the raw hash of that machine's installed `planner.cjs`.) The first bullet
-below is the 2026-10-19 record. The others are older: the offline suite and the fork rehearsal from 2026-10-08, and the
-live read-only smoke from 2026-10-06, on earlier versions of some files. The 2026-10-08 files are the ones in this
-repository's first commit. Everything ran on Windows with `ethers` 6.17.0, on Node v22.7.0 up to 2026-10-08 and
-v22.23.3 on 2026-10-19. Any edit to a file changes its hash; re-run the tests after one.
+setup records, `autonomy.planner_sha256`, is the raw hash of that machine's installed `planner.cjs`.) The first two
+bullets below are the 2026-10-23 and 2026-10-19 records. The others are older: the offline suite and the fork
+rehearsal from 2026-10-08, and the live read-only smoke from 2026-10-06, on earlier versions of some files. The
+2026-10-08 files are the ones in this repository's first commit. Everything ran on Windows with `ethers` 6.17.0, on
+Node v22.7.0 up to 2026-10-08 and v22.23.3 since 2026-10-19. Any edit to a file changes its hash; re-run the tests
+after one.
 
 | File | sha256 (LF line endings) |
 |---|---|
-| `planner.cjs` | `d46f49bd70ef1cd2c1f890c0e175312e7f686ef37ca331eaa883227228783e09` |
+| `planner.cjs` | `a0054b5680565e1bd3407bdb0ac311f396a1076e6e1b6768f02009fbee067a32` |
+| `planner/blind.cjs` | `d8124939321970f8f207b48acbfcdc703e674b00c3b4b0e762afcad3fd035cc7` |
 | `planner/c.cjs` | `970aecb2021a56246fdf2423572a14f73cf7a90387b5fd6e2d2adb30eb48dc91` |
-| `planner/d.cjs` | `de804f3937052d7c418e3672d0ce527d05784c1ab2a01d1c94fe2e21c0d3ac28` |
+| `planner/d.cjs` | `99568bacae8614a8dc2edb33c6451e2a79966d861d13616cf3b111ac3f9a267f` |
 | `planner/e.cjs` | `72b99c27dea8c075b533336386b93dac4991b15c9a66ceef2449a866266afae2` |
 | `planner/exec-core.cjs` | `f6d701b7516d308199009efa1ffd8f3b21f8f446966d3e61885a4c91fb1f61c6` |
 | `planner/exec.cjs` | `981b17b2306d2763d2deb0481f311325f149b87255f1b886dfaf5e2b43f70fc5` |
@@ -590,20 +640,32 @@ v22.23.3 on 2026-10-19. Any edit to a file changes its hash; re-run the tests af
 | `planner/g.cjs` | `2e90acb6edee64e3cbd4f2bd1606adc8eb2a666535862742298c75f8c62a8738` |
 | `planner/h.cjs` | `775f68189c74cd7a576df4cd9868a3be1218d26ec0b1f3771361a1fa4cad2eae` |
 | `planner/halfb.cjs` | `f469de4b846564af34e12ecc301adb723853bb4aed3deb182348529d9b91e55d` |
-| `planner/lib.cjs` | `df9e12d78ac50a82661c58a335f708acb57295a1e5c944af2538f88956c9589f` |
+| `planner/lib.cjs` | `6e50e70a6c45e0d8a5d3f9498fcbbf6399cd7c5f4d450d29f20738bb4ae67c86` |
 | `planner/ramp.cjs` | `dc14003d7085f958d81a47fa2369dc94203c17c593340e4d154fd8691a8da086` |
-| `planner/report.cjs` | `2497231ceac4454ad47f7693990a7508793a461c0c2b00445da92dbc6b25edbb` |
+| `planner/report.cjs` | `72697adb4c13bcb429526c948e9cceba7e193efa9aa28aba913c8d77ead07bc2` |
 | `planner/table.cjs` | `4d4e00d9e90c9840dd7ac67e20e027ce9547ce989c8a4b402b424bd16083280d` |
-| `planner/wake.cjs` | `151db4074f1ed2296231c43ad5a5af318f8abd36c71119e35c0020bc86e60120` |
-| `planner.config.example.json` | `09487aedcb7340ab2dc543c424db467480883614bfbd79fe0a7ce9d699dac354` |
-| `planner.test.cjs` | `88bd2ac47bf5add17fbeb496075f81a33a855d10744c86ae7e2c9f5d3fbe93eb` |
+| `planner/wake.cjs` | `89313626d955a158e48d0953fe53d6b3fad6516f1569652edf4556a5710b98c2` |
+| `planner.config.example.json` | `ec6c35f8243941e66a464bc2551e9aa4d631701749b0bd30aa491b20d81e5fbe` |
+| `planner.test.cjs` | `5b7748e4c0b6d65d6a8343be78fd9024799a184543637d6068a5a5901971e259` |
 
+- **2026-10-23, an AI agent in the loop: D's `forecast-file` method and the routines.** New since 2026-10-19:
+  `planner/blind.cjs` (the price-free Reality.eth reads of a research run-id); `d.cjs`'s `forecast-file` method
+  (`forecastMethod`, `ai` being its first name: a forecast file at most `forecastMaxAgeHours` old, from any source,
+  copied byte for byte and checked, its free-text method marked as this arm's in `base-forecast.json`); `lib.cjs`'s two
+  config keys and the mark (`FORECAST_FILE_MARK`, the older `RESEARCH_METHOD_PREFIX` still recognized); `planner.cjs`'s
+  `blind` subcommand; `wake.cjs` and `report.cjs` carrying the `no-forecast` status and the `forecast_file` block. The
+  `csv` method, the default, is unchanged. **Offline**, `node planner.test.cjs --dir <scratch>` with `NODE_PATH` naming
+  `ethers` 6.17.0: **128 passed, 0 failed, 1 skipped** (the symlinked-config case, as below), exit code 0,
+  6382 s, on exactly the files hashed above (up to line endings). The new `forecast-file` section is thirteen of them.
+  D also takes only an ISO 8601 UTC `generated_at` and names rows rather than quoting the file in its refusal notes,
+  and `report.cjs` carries the method's sha256 instead of its text, so no forecast file's words reach the trading agent.
+  `routine.cjs` (the runner, not hashed here) has its own offline suite, `routine.test.cjs`: 57 passed, 0 failed.
 - **2026-10-19, the CSV base skill.** Only `lib.cjs`, `exec.cjs`, `h.cjs` and `wake.cjs` differ from the 2026-10-08
   files: they also accept run-ids whose forecast was researched (`lib.isArmForecastMethod`: seer-trade's D swapped in,
   or an earlier research add-on), so Half B, H and the wake's repair still see the positions those runs opened. The
   suite has no case of its own for such a run-id. **Offline**, `node planner.test.cjs --dir <scratch>` with `NODE_PATH`
   naming `ethers` 6.17.0: **117 passed, 0 failed, 1 skipped** (the symlinked-config case, as below), exit
-  code 0, 7091 s, on exactly the files hashed above (up to line endings), none of them modified during the run.
+  code 0, 7091 s, on that day's files (up to line endings), none of them modified during the run.
 - **Offline**, `node planner.test.cjs --dir <scratch>` (`ethers` 6.17.0 in a parent folder's `node_modules`; no
   `NODE_PATH` needed): **117 passed, 0 failed, 1 skipped**, exit code 0, 3579 s, on the 2026-10-08 files (checked before
   and after the run). Added on 2026-10-07: TradeExecutor (`executor-session-key`) is refused before any helper or
@@ -636,7 +698,7 @@ v22.23.3 on 2026-10-19. Any edit to a file changes its hash; re-run the tests af
   - a local anvil fork of Optimism mainnet at block 157,912,851, on loopback;
   - a throwaway holder funded on the fork with 50 sUSDS, 20 USDC and 1 ETH;
   - the installed helper, signer and planner, with the signer's real allowlist;
-  - the real `.cmd` wrapper extracted from `steps/I-setup.md`, and a stub `claude` that runs `node <planner path> wake <run-id>` as the scheduled prompt does;
+  - the real `.cmd` wrapper extracted from `steps/I-setup.md` (the Windows wrapper of that date, since replaced by `r3.cjs trade`, which takes the same lock, gates and exit codes), and a stub `claude` that runs `node <planner path> wake <run-id>` as the scheduled prompt did;
   - the real price-blind CSV, stored version 1.
 
   **Day 1** forced the recovery rule.

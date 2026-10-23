@@ -21,14 +21,24 @@ const crypto = require('crypto');
 
 const ENTRY_DIR = path.resolve(__dirname, '..'); // the folder holding planner.cjs
 const CONFIG_NAME = 'planner.config.json';
-const CONFIG_KEYS = ['helperPath', 'signerPath', 'projectRoot', 'rpcGapMs', 'parallel'];
+const CONFIG_KEYS = ['helperPath', 'signerPath', 'projectRoot', 'rpcGapMs', 'parallel', 'forecastMethod', 'forecastMaxAgeHours'];
+// D's forecast methods (steps/D-forecast.md): 'csv', the default, reads the stored CSV; 'forecast-file' reads a forecast
+// file (research-forecast.json) that any source wrote in its shape: the price-blind AI research, another model, a script
+// or a pool of forecasters. 'ai' is 'forecast-file' under its first name, kept so existing configs keep working.
+const FORECAST_METHODS = ['csv', 'forecast-file', 'ai'];
+const FORECAST_FILE_METHODS = ['forecast-file', 'ai'];
 
 // The forecast methods of this arm's run-ids (exec.armRunIds, the wake's repair, H): the stored CSV's
-// 'csv-face-value', and a researched forecast whose method string starts with RESEARCH_METHOD_PREFIX: a supervised run
-// that swapped seer-trade's D in (seer-trade's modularity contract), or a run-id an operator made with a research add-on
-// before using the CSV. Such run-ids may still hold positions, which Half B, H and the repair must keep seeing.
+// 'csv-face-value'; a forecast file D read, whose base-forecast.json method D marks with FORECAST_FILE_MARK in front of
+// the file's own free-text method; and, from before that mark, a method starting with RESEARCH_METHOD_PREFIX: D's first
+// 'ai' method, a supervised run that swapped seer-trade's D in (seer-trade's modularity contract), or a run-id an
+// operator made with an earlier research add-on. Such run-ids may hold positions, which Half B, H and the repair must
+// keep seeing.
+const FORECAST_FILE_MARK = 'deep-r3-trade D, forecast file';
 const RESEARCH_METHOD_PREFIX = 'seer-trade D (D-base-forecast.md) swapped into deep-r3-trade';
-function isArmForecastMethod(m) { return m === 'csv-face-value' || (typeof m === 'string' && m.startsWith(RESEARCH_METHOD_PREFIX)); }
+function isArmForecastMethod(m) { return m === 'csv-face-value' || (typeof m === 'string' && (m.startsWith(FORECAST_FILE_MARK) || m.startsWith(RESEARCH_METHOD_PREFIX))); }
+// base-forecast.json's method for a forecast file: its own text, marked as this arm's unless it already is
+function markForecastFileMethod(text) { const t = String(text); return isArmForecastMethod(t) ? t : `${FORECAST_FILE_MARK}: ${t}`; }
 const HELPER_CONFIG_NAME = 'chain-helper.config.json';
 const ETHERS_VERSION = '6.17.0';
 
@@ -52,7 +62,7 @@ class PlannerError extends Error {
 // A stop the skill defines. exit 3 (C stop, D stop, stale plan, refusal, affordability skip), 4 (a safety refusal:
 // nonce moved, pending transaction, hash mismatch) or 5 (transport failure after retries).
 // step: 'C' | 'D' | 'E' | ...; cause: a short machine code; status: the wake-status value the stop implies
-// ('aborted' | 'no-csv' | 'csv-store-mismatch'), or null when it is not a wake state (a supervised refusal);
+// ('aborted' | 'no-csv' | 'csv-store-mismatch' | 'no-forecast'), or null when it is not a wake state (a supervised refusal);
 // notes: the human text, in the form the skill asks for (e.g. "C step 2.1: markets.length 97 != 98");
 // fields: extra summary fields (counts and the like).
 class Stop extends Error {
@@ -126,6 +136,9 @@ function loadConfig() {
   };
   const rpcGapMs = num('rpcGapMs', 120, 0, 60000);
   const parallel = num('parallel', 1, 1, 8);
+  const forecastMethod = raw.forecastMethod === undefined ? 'csv' : raw.forecastMethod;
+  if (!FORECAST_METHODS.includes(forecastMethod)) throw cfgErr(`forecastMethod must be one of ${FORECAST_METHODS.join(', ')}`);
+  const forecastMaxAgeHours = num('forecastMaxAgeHours', 12, 1, 72);
 
   // projectRoot: an existing folder (no symlink at the leaf).
   let pst;
@@ -152,7 +165,7 @@ function loadConfig() {
   };
   const helperPath = tool('helperPath');
   const signerPath = tool('signerPath');
-  return Object.freeze({ helperPath, signerPath, projectRoot: projectReal, rpcGapMs, parallel, configFile: file, entryDir: entryReal });
+  return Object.freeze({ helperPath, signerPath, projectRoot: projectReal, rpcGapMs, parallel, forecastMethod, forecastMaxAgeHours, configFile: file, entryDir: entryReal });
 }
 
 // The holder: the signer address the operator pinned in the helper's own config (chain-helper.config.json next to
@@ -524,7 +537,7 @@ function saveDetail(ctx, summary, toolCalls) {
 // ---------------------------------------------------------------------------------------------------------------
 
 // Each subcommand's module, next to this file; a later step of the build adds its own file.
-const MODULES = Object.freeze({ c: './c.cjs', d: './d.cjs', e: './e.cjs', f: './f.cjs', g: './g.cjs', exec: './exec.cjs', halfb: './halfb.cjs', h: './h.cjs', report: './report.cjs', wake: './wake.cjs' });
+const MODULES = Object.freeze({ c: './c.cjs', blind: './blind.cjs', d: './d.cjs', e: './e.cjs', f: './f.cjs', g: './g.cjs', exec: './exec.cjs', halfb: './halfb.cjs', h: './h.cjs', report: './report.cjs', wake: './wake.cjs' });
 
 // Map any failure to (exit, summary fields).
 function failureSummary(e, sub) {
@@ -592,7 +605,8 @@ function emitSummary(obj) { process.stdout.write(renderSummary(obj) + '\n'); }
 const stopJson = (s) => ({ step: s.step, cause: s.cause, status: s.status, notes: s.notes });
 
 module.exports = {
-  ENTRY_DIR, CONFIG_NAME, CONFIG_KEYS, EXIT, MAX_OUTPUT_CHARS, ETHERS_VERSION, RESEARCH_METHOD_PREFIX, isArmForecastMethod,
+  ENTRY_DIR, CONFIG_NAME, CONFIG_KEYS, FORECAST_METHODS, FORECAST_FILE_METHODS, EXIT, MAX_OUTPUT_CHARS, ETHERS_VERSION,
+  FORECAST_FILE_MARK, RESEARCH_METHOD_PREFIX, isArmForecastMethod, markForecastFileMethod,
   PlannerError, Stop, ToolFailure,
   lc, sleep, nowIso, nowIsoSec, sha256, clip, isInside, lastJson,
   loadConfig, holderAddress, loadEthers,

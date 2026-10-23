@@ -43,8 +43,8 @@ const wstop = (cause, notes, exit = EXIT.STOP, fields = {}) => new Stop({ step: 
 
 const gateProblems = X.gateProblems;
 
-// The run-ids the repair scans: this arm's (exec.armRunIds: base-forecast.json csv-face-value and allocation.json
-// max-ev), plus any run-id of this arm's D with an inflight file but no allocation.json yet: a wake whose PSM3 ramp (sent
+// The run-ids the repair scans: this arm's (exec.armRunIds: a base-forecast.json method of this arm,
+// lib.isArmForecastMethod: csv-face-value, D's forecast-file mark or the older prefix; and allocation.json max-ev), plus any run-id of this arm's D with an inflight file but no allocation.json yet: a wake whose PSM3 ramp (sent
 // after E, before F) was left Pending or unclear writes no allocation.json, and is still repaired by the next wake.
 function repairCandidates(ctx) {
   const ids = EX.armRunIds(ctx); const seen = new Set(ids);
@@ -290,7 +290,7 @@ async function run(ctx) {
   const d = W.steps.d;
   if (hbAborted || rep.blockSends || hd) W.status = 'aborted';
   else if (haStop && haStop.step === 'C') W.status = 'aborted';
-  else if (haStop && haStop.step === 'D') W.status = d && d.stop && ['no-csv', 'csv-store-mismatch'].includes(d.stop.status) ? d.stop.status : 'aborted';
+  else if (haStop && haStop.step === 'D') W.status = d && d.stop && ['no-csv', 'csv-store-mismatch', 'no-forecast'].includes(d.stop.status) ? d.stop.status : 'aborted';
   else if (haStop && ['E', 'F', 'G'].includes(haStop.step)) W.status = 'aborted';
   else if (haStop && haStop.keep_aborted) W.status = 'aborted';
   else W.status = traded ? 'traded' : 'nothing-to-do';
@@ -298,9 +298,9 @@ async function run(ctx) {
   const rr = await report();
   if (rr.exit !== 0) W.notes.push('report failed: ' + clip(rr.summary.error || JSON.stringify(rr.summary.stop), 200));
   const out = { status: W.status, stopped_at_step: W.stopped_at_step, half_a_stop: haStop ? { step: haStop.step, cause: haStop.summary.stop ? haStop.summary.stop.cause : haStop.summary.code } : null, traded, repaired: rep.repaired.length, recovered: (rep.recovered || []).map((x) => ({ run_id: x.run_id, group: x.group, outcome: x.outcome })), sends_blocked: rep.blockSends || null, h_rescored: W.h_rescored, h_results: Object.fromEntries(Object.entries(W.h).map(([k, v]) => [k, v.result || (v.stop ? 'stopped' : null)])), notes: W.notes.slice(0, 20), report: ctx.rel('report.md'), wake_status: ctx.rel('wake-status.json') };
-  if (worstExit !== 0 || W.status === 'aborted' || W.status === 'no-csv' || W.status === 'csv-store-mismatch') {
+  if (worstExit !== 0 || W.status === 'aborted' || W.status === 'no-csv' || W.status === 'csv-store-mismatch' || W.status === 'no-forecast') {
     const exit = worstExit && [EXIT.STOP, EXIT.SAFETY, EXIT.TRANSPORT].includes(worstExit) ? worstExit : EXIT.STOP;
-    throw new Stop({ step: 'W', cause: W.status === 'no-csv' || W.status === 'csv-store-mismatch' ? W.status : (hd ? 'half-done' : haStop ? 'half-a-stop' : hbAborted ? 'half-b-aborted' : hbStopped ? 'half-b-stop' : haCut ? 'stale-simulation' : 'aborted'), status: W.status, notes: clip(W.notes.join(' | '), 1500), exit, fields: out });
+    throw new Stop({ step: 'W', cause: W.status === 'no-csv' || W.status === 'csv-store-mismatch' || W.status === 'no-forecast' ? W.status : (hd ? 'half-done' : haStop ? 'half-a-stop' : hbAborted ? 'half-b-aborted' : hbStopped ? 'half-b-stop' : haCut ? 'stale-simulation' : 'aborted'), status: W.status, notes: clip(W.notes.join(' | '), 1500), exit, fields: out });
   }
   return out;
 }

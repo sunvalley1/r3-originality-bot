@@ -3,5 +3,7 @@
   "signerPath": "<absolute path of the installed signer.cjs, outside the project>",
   "projectRoot": "<absolute path of the project folder the wake runs in>",
   "rpcGapMs": 120,
-  "parallel": 1
+  "parallel": 1,
+  "forecastMethod": "csv",
+  "forecastMaxAgeHours": 12
 }

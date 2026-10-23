@@ -13,7 +13,7 @@ the only work is proving that the live endpoint still describes that same list b
 | **INPUT artifact** | none - this is the entry step of the pipeline |
 | **OUTPUT artifact** | `./run/<run-id>/candidates.json` |
 | **Reads** | `https://<R3_DATA_HOST>/.netlify/functions/get-originality-r3-v3-markets-data` (public, no auth, no key; `R3_DATA_HOST` is declared below) |
-| **Consumed by** | `D-csv-forecast.md` (D), which joins its CSV onto these rows, and `F-max-ev.md` (F), for bundle, slot, pools and repo-token collateral |
+| **Consumed by** | `D-forecast.md` (D), which joins its forecast onto these rows, and `F-max-ev.md` (F), for bundle, slot, pools and repo-token collateral |
 
 **Planner:** `node <planner path> c <run-id>` performs this step and writes `candidates.json` (`I-setup.md` I.2 §7, *The planner*).
 
@@ -25,12 +25,13 @@ the only work is proving that the live endpoint still describes that same list b
   in this table's order, with matching repo tokens, parent wrapped tokens and `middleMarkets`). It is declared
   here once and every use references this parameter, not a literal host (the chain helper's `dataFunctionUrl`
   config key pins the same host: `I-setup.md` I.2 §7). This step's fetch reads the raw body
-  (step 1), never WebFetch, so the wake needs no host allowlist entry. The scheduled run makes that fetch and
-  this step's `eth_call`s through the operator-installed read-only chain helper, never `node -e`, under
-  I-setup's allowlisted `Bash(node <chain helper path> *)` (a Windows wake also needs
-  `PowerShell(node <chain helper path> *)`, or Git Bash for the wake account); `I-setup.md` I.2 §7 is the one
-  place that says how the helper's files, arguments and bulk reads work. A supervised session may use
-  `node -e`, because each call prompts the human. A temporary mirror served the v3 set while deep.seer.pm
+  (step 1), never WebFetch, so the wake needs no WebFetch permission (the trading environment's network still
+  allows the host, `I-setup.md` I.2 §7). The scheduled run makes that fetch and this step's `eth_call`s through
+  the installed read-only chain helper, never `node -e`, which the planner starts as its own child process (the
+  trading routine has no tool entry for it); a supervised session runs it as `node <chain helper path> …`, each
+  call prompting the human unless allowed. `I-setup.md` I.2 §7 is the one place that says how the helper's
+  files, arguments and bulk reads work. A supervised session may use `node -e`, because each call prompts the
+  human. A temporary mirror served the v3 set while deep.seer.pm
   was down (2026-10-01).
 - Three levels, all rooted in sUSDS `0xb5b2dc7fd34c249f4be7fb1fcea07950784229e0`:
   1. **Parent** `0x37ab5cbeee3a32289430e5d38b914ec7f580fd87` - a 3-outcome multi-scalar, outcomes Bundle A / B / C
@@ -161,7 +162,7 @@ the only work is proving that the live endpoint still describes that same list b
    **A transport failure is not a mismatch.** This is the one place that says what C does when a read it makes through the helper (`multicall`, `call` or `slot0`: check 2.7's file, check 2.8's pool reads, step 4's two rounds and the onchain rebuild's files; not `data`, whose `data_unreachable` and `data_rate_limited` take step 1's fallback) ends in the helper's **exit 5**, network or RPC: `rpc_unreachable` (also its code for its own timeout), `rpc_rate_limited`, `rpc_http`, `rpc_malformed` or `rpc_error` (the code table is in `../scripts/chain-helper.README.md`). That says nothing about the body, the table or the chain: only `call_reverted` (exit 8), `decode_failed` (exit 1) or a value that differs is a mismatch. The read is idempotent and read-only, so re-run the identical command, one at a time and spaced by a few seconds (the run has no wait tool: the helper's own back-off and the time the previous call took are that spacing), up to 5 more times. The helper has already retried a timeout, or a rate limit it recognizes, 3 times itself before it reports `rpc_unreachable` or `rpc_rate_limited`; a rate limit the public RPC words otherwise comes back at once as `rpc_error` and is re-run here the same way (`I-setup.md` I.2 §7, *Rate limits*); the 5 re-runs are on top of the helper's own. A cold node may be warmed first with smaller reads files of the same kind (read-only; their answers never stand in for the real file's). Accept a re-run only on exit 0 (for a `multicall`, with `count` equal to the file's reads). Only if the last re-run still ends in exit 5 is it a C stop: a scheduled run ends `aborted` with cause `rpc_unreachable` and the failed reads file's name and the helper's code in `notes` (`I-setup.md` I.2 §2 records the cause); a supervised session says so and stops. A transport failure never triggers the onchain rebuild, which goes through the same RPC and would end the same way.
 
 3. **Build one candidate per table row**, `i = 0..97`, in table order. `market` is the repo string exactly as
-   the table spells it, case preserved, because `marketsData` is keyed on it and D's CSV joins on it. `address`
+   the table spells it, case preserved, because `marketsData` is keyed on it and D's CSV method joins on it (`D-methods/csv.md` step 4). `address`
    is the stable join key for everything downstream. `kind` is `"scalar"` for all 98.
 
 4. **Set `tradeable` mechanically** - no judgement, no depth test:

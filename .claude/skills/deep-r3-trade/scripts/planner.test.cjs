@@ -20,7 +20,7 @@
  * made-up holder address; and a JSON ledger the mock signer "mines" a transaction into (it holds no key and signs
  * nothing). The prices are set so that F finds every route: a set-sell, a pair (dual-buy), simple buys on both sides, a
  * complex buy, a market whose forecast equals its price (no row) and 92 markets with no forecast.
- * Sections (--only takes any of them): static, usage, lib, repair, pipeline, c-variants, g-safety, exec-safety, boundary,
+ * Sections (--only takes any of them): static, usage, lib, repair, pipeline, c-variants, forecast-file, g-safety, exec-safety, boundary,
  * mergearb, wake, ramp, recovery, cap.
  * g-safety and exec-safety run on the plan the pipeline builds, so they run the pipeline first.
  *
@@ -633,7 +633,7 @@ const ARGS = {
   helper: argOf('--helper'), signer: argOf('--signer'), bin: argOf('--bin'), project: argOf('--project'), csvStore: argOf('--csv-store'),
   ethersFrom: argOf('--ethers-from'), runId: argOf('--run-id'), gapMs: argOf('--gap-ms'),
 };
-const SECTIONS = ['static', 'usage', 'lib', 'repair', 'pipeline', 'c-variants', 'g-safety', 'exec-safety', 'boundary', 'mergearb', 'wake', 'ramp', 'recovery', 'cap'];
+const SECTIONS = ['static', 'usage', 'lib', 'repair', 'pipeline', 'c-variants', 'forecast-file', 'g-safety', 'exec-safety', 'boundary', 'mergearb', 'wake', 'ramp', 'recovery', 'cap'];
 const ONLY = ARGS.only ? new Set(ARGS.only.split(',').map((s) => s.trim())) : null;
 if (ONLY) for (const s of ONLY) if (!SECTIONS.includes(s)) { console.log(`unknown section ${s}; sections: ${SECTIONS.join(', ')}`); process.exit(2); }
 const want = (s) => !ONLY || ONLY.has(s);
@@ -1250,6 +1250,118 @@ async function repairSection(root) {
       const c = stubCtx(today); const rep = await WK.repair(c, env(c, true), []);
       ok(rep.notes.some((x) => x.startsWith(`run ${d}: group ${gid} (1 of 2 transactions landed) is half-done`)) && !rep.repaired.some((r) => r.run_id === d) && rjp(d, 'wake-status.json').status === 'aborted' && !HB.isFinalRun(c, d) && JSON.stringify(rjp(d, 'fills.json').runs) === JSON.stringify(rows), `${today}: ${JSON.stringify(rep)}`);
     }
+  });
+}
+
+// =================================================================================================================
+// SECTION forecast-file: D's forecast-file method (forecastMethod "forecast-file", or "ai", its first name) and the
+// price-free `blind` input of a research run-id
+// =================================================================================================================
+async function forecastFileSection(root) {
+  const L = makeLayout(path.join(root, 'ai'));
+  installPlanner(L.bin, { ...L.cfg, forecastMethod: 'forecast-file', forecastMaxAgeHours: 12 });
+  const S = sw(); const T = tb().T.rows; const k0 = S.kids[0];
+  const w = freshWorld();
+  // one answer posted on the first market's question (62, not final for 84 hours): the research's strongest evidence
+  w.reality[lc(k0.qid)] = { finalize: w.ts + 84 * 3600, best: '0x' + (62n * 10n ** 18n).toString(16).padStart(64, '0'), bond: '1000000000000000000' };
+  setWorld(L, w);
+  const P = (args, o) => runPlanner(L, args, o);
+  const rf = (rid, n) => path.join(L.proj, 'run', rid, n);
+  const PREFIX = 'seer-trade D (D-base-forecast.md) swapped into deep-r3-trade'; // the mark from before 2026-10-23
+  const MARK = 'deep-r3-trade D, forecast file';
+  const hoursAgo = (h) => new Date(Date.now() - h * 3600000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+  const research = (o = {}) => ({
+    generated_at: o.generated_at || hoursAgo(0.5), method: o.method === undefined ? 'a pool of three forecasters, averaged (planner test fixture)' : o.method,
+    price_seen: o.price_seen === undefined ? false : o.price_seen,
+    forecasts: T.slice(0, 10).map((t, i) => ({
+      market: o.marketOf ? o.marketOf(t, i) : `What will be the originality score of ${t.repo} in Deep Funding Round 3?`, address: lc(t.address),
+      p: [0.29, 0.68, 0.03], invalid_p: 0.03, sums_to_one: true, reasoning: 'planner test fixture', sources: ['https://github.com/' + t.repo], would_change_my_mind: 'a juror sheet',
+    })),
+  });
+  const cFor = (rid) => { const c = P(['c', rid]); ok(c.code === 0, `c ${rid}: ${say(c)}`); };
+
+  await test('config: forecastMethod "both", forecastMaxAgeHours 0 or 100 -> exit 2 config_malformed; "ai" is accepted', () => {
+    for (const [what, extra] of [['method both', { forecastMethod: 'both' }], ['age 0', { forecastMaxAgeHours: 0 }], ['age 100', { forecastMaxAgeHours: 100 }]]) {
+      const bad = path.join(L.root, 'bin-bad'); installPlanner(bad, { ...L.cfg, ...extra });
+      const r = P(['c', 'cfg-x'], { bin: bad }); ok(r.code === 2 && r.j.code === 'config_malformed', `${what}: ${say(r)}`);
+    }
+    const alias = path.join(L.root, 'bin-ai'); installPlanner(alias, { ...L.cfg, forecastMethod: 'ai' });
+    const a = P(['c', 'cfg-ai'], { bin: alias }); ok(a.code === 0, `method ai: ${say(a)}`);
+  });
+  await test('blind: the Reality.eth state of the 98 questions, price-free, into onchain-state.blind.json; the posted 62 read as score 62; no signer call', () => {
+    cFor('ai-research-old');
+    const r = P(['blind', 'ai-research-old']);
+    ok(r.code === 0 && r.j.questions === 98 && r.j.answers_posted === 1, say(r));
+    const st = rj(rf('ai-research-old', 'onchain-state.blind.json')); const m = st.markets.find((x) => x.address === lc(k0.addr));
+    ok(st.markets.length === 98 && m && m.answer_posted === true && m.best_answer_score === 62 && m.finalize_ts === w.ts + 84 * 3600, clip(m));
+    ok(!/pool|liquidity|"price"|sqrt|tick/i.test(JSON.stringify(st)), 'a price-like key in onchain-state.blind.json');
+    const det = rj(rf('ai-research-old', 'planner/blind.json')); ok(det.tool_calls.signerCalls === 0, JSON.stringify(det.tool_calls));
+  });
+  await test('d (forecast-file): no research forecast anywhere -> exit 3, D stop no-forecast (status no-forecast), no base-forecast.json', () => {
+    cFor('ai-t1');
+    const r = P(['d', 'ai-t1']); ok(r.code === 3 && r.j.stop.step === 'D' && r.j.stop.cause === 'no-forecast' && r.j.stop.status === 'no-forecast' && !exists(rf('ai-t1', 'base-forecast.json')), say(r));
+  });
+  await test('d (forecast-file): only a research forecast 13 hours old (forecastMaxAgeHours 12) -> the same no-forecast stop; nothing copied', () => {
+    wj(rf('ai-research-old', 'research-forecast.json'), research({ generated_at: hoursAgo(13) }));
+    cFor('ai-t2');
+    const r = P(['d', 'ai-t2']); ok(r.code === 3 && r.j.stop.cause === 'no-forecast' && !exists(rf('ai-t2', 'research-forecast.json')), say(r));
+  });
+  await test('d (forecast-file): a fresh forecast file in another run-id -> copied byte for byte; 10 forecasts with C\'s market strings and the file\'s method, marked as this arm\'s; 88 without a row', () => {
+    fs.mkdirSync(path.join(L.proj, 'run', 'ai-research-new'), { recursive: true }); wj(rf('ai-research-new', 'research-forecast.json'), research());
+    cFor('ai-t3');
+    const r = P(['d', 'ai-t3']);
+    ok(r.code === 0 && r.j.source === 'forecast-file' && r.j.forecasts === 10 && r.j.forecast_file.from_run_id === 'ai-research-new' && r.j.forecast_file.no_forecast === 88 && r.j.forecast_file.ignored_rows === 0 && /^[0-9a-f]{64}$/.test(r.j.forecast_file.method_sha256), say(r));
+    ok(fs.readFileSync(rf('ai-t3', 'research-forecast.json')).equals(fs.readFileSync(rf('ai-research-new', 'research-forecast.json'))), 'not a byte-for-byte copy');
+    const bf = rj(rf('ai-t3', 'base-forecast.json'));
+    ok(bf.method === `${MARK}: a pool of three forecasters, averaged (planner test fixture)` && bf.price_seen === false && bf.forecasts.length === 10 && bf.forecasts[0].market === T[0].repo && bf.forecasts[0].address === lc(T[0].address) && JSON.stringify(bf.forecasts[0].p) === '[0.29,0.68,0.03]' && bf.forecasts[0].invalid_p === 0.03, clip(bf.forecasts[0]));
+  });
+  await test('e on a forecast file: 10 identity blends (E reads it as it reads a CSV forecast)', () => {
+    const r = P(['e', 'ai-t3']); ok(r.code === 0 && r.j.blends === 10 && r.j.null_price === 0, say(r));
+  });
+  await test('d (forecast-file): a run-id\'s own research forecast is used whatever its age (25 hours: a supervised session researched for this run)', () => {
+    cFor('ai-t4'); wj(rf('ai-t4', 'research-forecast.json'), research({ generated_at: hoursAgo(25) }));
+    const r = P(['d', 'ai-t4']); ok(r.code === 0 && r.j.forecast_file.from_run_id === 'ai-t4' && r.j.forecast_file.age_hours === null && r.j.forecasts === 10, say(r));
+  });
+  await test('d (forecast-file): a file still carrying the mark from before 2026-10-23 keeps its method as is; method ai reads files the same way; both marks are this arm\'s', () => {
+    cFor('ai-t6'); wj(rf('ai-t6', 'research-forecast.json'), research({ method: `${PREFIX} by D's ai method (planner test fixture) calib=none` }));
+    const alias = path.join(L.root, 'bin-ai2'); installPlanner(alias, { ...L.cfg, forecastMethod: 'ai', forecastMaxAgeHours: 12 });
+    const r = P(['d', 'ai-t6'], { bin: alias }); ok(r.code === 0 && r.j.source === 'forecast-file' && r.j.forecasts === 10, say(r));
+    const bf = rj(rf('ai-t6', 'base-forecast.json')); ok(bf.method === `${PREFIX} by D's ai method (planner test fixture) calib=none`, clip(bf.method));
+    const lib = require(path.join(L.bin, 'planner', 'lib.cjs'));
+    ok(lib.isArmForecastMethod(`${MARK}: anything`) && lib.isArmForecastMethod(`${PREFIX} anything`) && lib.isArmForecastMethod('csv-face-value'), 'this arm\'s marks');
+    ok(!lib.isArmForecastMethod('a pool of three forecasters, averaged') && !lib.isArmForecastMethod('seer-trade D (D-base-forecast.md) on its own'), 'an unmarked method is not this arm\'s');
+    ok(lib.markForecastFileMethod('x') === `${MARK}: x` && lib.markForecastFileMethod(`${MARK}: y`) === `${MARK}: y` && lib.markForecastFileMethod(`${PREFIX} z`) === `${PREFIX} z`, 'marking is idempotent');
+  });
+  await test('d (forecast-file): a malformed forecast file -> exit 3 forecast-refused, no base-forecast.json: price_seen true; a p not summing to 1; Invalid 0; a row naming another repo; an empty method; a generated_at that is not ISO 8601 UTC', () => {
+    const cases = [
+      ['price_seen', research({ price_seen: true })],
+      ['sum', (() => { const x = research(); x.forecasts[1].p = [0.3, 0.68, 0.03]; return x; })()],
+      ['invalid 0', (() => { const x = research(); x.forecasts[2].p = [0.3, 0.7, 0]; x.forecasts[2].invalid_p = 0; return x; })()],
+      ['misnamed', research({ marketOf: (t, i) => (i === 3 ? 'What will be the originality score of nobody/else?' : t.repo) })],
+      ['method', research({ method: '  ' })],
+      ['date text', research({ generated_at: 'Oct 23 2026 09:00 UTC (a sentence Date.parse also reads)' })],
+    ];
+    for (const [what, body] of cases) {
+      const rid = 'ai-bad-' + what.replace(/[^a-z0-9]/g, '');
+      cFor(rid); wj(rf(rid, 'research-forecast.json'), body);
+      const r = P(['d', rid]); ok(r.code === 3 && r.j.stop.cause === 'forecast-refused' && r.j.stop.status === 'aborted' && !exists(rf(rid, 'base-forecast.json')), `${what}: ${say(r)}`);
+    }
+  });
+  await test('d (forecast-file) --supply --continue still stores a CSV version (the CSV stays available under either method)', () => {
+    fs.mkdirSync(path.join(L.proj, 'inputs'), { recursive: true }); fs.writeFileSync(path.join(L.proj, 'inputs', 'forecast.csv'), csvText());
+    cFor('ai-t5');
+    const r = P(['d', 'ai-t5', '--supply', 'inputs/forecast.csv', '--continue']); ok(r.code === 0 && r.j.source === 'new' && r.j.csv.version === 1 && exists(path.join(L.proj, 'run', 'csv', 'current.json')), say(r));
+  });
+  await test('wake (forecast-file) with no forecast file young enough: status no-forecast, Half A stops at D, the run still reports (exit 3)', () => {
+    // every research-forecast.json goes, the copies in trading run-ids and the malformed ones included: D takes the newest
+    // young one and refuses a malformed newest rather than falling back to an older one
+    for (const d of fs.readdirSync(path.join(L.proj, 'run'))) { const f = rf(d, 'research-forecast.json'); if (exists(f) && d !== 'ai-research-old') fs.unlinkSync(f); }
+    setupRecord(L.proj); wrapperLock(L.proj, 'ai-wake-1');
+    try {
+      const r = P(['wake', 'ai-wake-1']);
+      const ws = rj(rf('ai-wake-1', 'wake-status.json'));
+      ok(r.code === 3 && ws.status === 'no-forecast' && ws.stopped_at_step === 'D' && exists(rf('ai-wake-1', 'report.md')) && !exists(rf('ai-wake-1', 'base-forecast.json')), say(r) + ' ' + clip(ws));
+    } finally { rmrf(lockDir(L.proj)); }
   });
 }
 
@@ -2086,6 +2198,7 @@ async function liveSection(workRoot) {
     const needPipe = want('pipeline') || want('g-safety') || want('exec-safety');
     if (needPipe) await sec('pipeline', () => pipelineSection(L));
     if (want('c-variants')) await sec('c-variants', () => cVariantsSection(L));
+    if (want('forecast-file')) await sec('forecast-file', () => forecastFileSection(root));
     if (want('g-safety')) await sec('g-safety', () => gSafetySection(L));
     if (want('exec-safety')) await sec('exec-safety', () => execSafetySection(L));
     if (want('boundary')) await sec('boundary', () => boundarySection(root));
