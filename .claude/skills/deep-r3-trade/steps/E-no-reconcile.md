@@ -4,7 +4,7 @@ Copy D's numbers into `blended`, attach the market price beside them, change not
 
 ## Input / Output
 
-- **INPUT:** `./run/<run-id>/base-forecast.json` (from `D-csv-forecast.md`) and
+- **INPUT:** `./run/<run-id>/base-forecast.json` (from `D-forecast.md`) and
   `./run/<run-id>/candidates.json` (from `C-select.md`) — the same two files
   `../../seer-trade/steps/E-reconcile-price.md` takes, which is what makes the two E steps swappable.
 - **OUTPUT:** `./run/<run-id>/blended.json`, read by `F-max-ev.md`.
@@ -65,7 +65,7 @@ Copy D's numbers into `blended`, attach the market price beside them, change not
    row with `market_price: null`, never dropped, and E says so plainly; F then sends it to `skipped` (F step 1).
 6. **One blend row per forecast row**, same order, same count; then write `blended.json` with
    `method: "identity"`. E never drops a forecast row. A market D wrote no forecast for (a blank CSV cell,
-   which means "unknown", or a repo the CSV does not list) has no row, and E invents none; F reads it from
+   which means "unknown", a repo the CSV does not list, or a market the forecast file has no row for) has no row, and E invents none; F reads it from
    `candidates.json` for the forecast-free arbitrage only (`set-sell`, `merge-arb`, sub-1 pair) and makes
    no directional trade on it.
 
@@ -77,8 +77,8 @@ rules it shows are unchanged.
 
 `DefiLlama/chainlist`, `0x4b8bda295e28375ed17abc8d1472e9cccadc93aa`, bundle A slot 20: `upPrice` 0.4657,
 `downPrice` 0.3975, sum 0.8632 — the cheapest UP+DOWN pair of the 98 (not a complete set: that also
-needs the pool-less child Invalid). D sets `p_invalid` flatly to 0, so a CSV `originality` of 0.62
-reaches E as:
+needs the pool-less child Invalid). D's default `csv` method (`D-methods/csv.md`) sets `p_invalid` flatly to 0,
+so a CSV `originality` of 0.62 reaches E as:
 
 ```
 own           [0.38,   0.62,   0.0   ]
@@ -107,7 +107,7 @@ same rule.
   number in `blended`. If a price changed your output, you ran the reasoned arm's blend step instead of
   this one, and the A/B is void.
 - **Never fill or nudge `p_invalid` from the third entry** — the pool's 0.1368 (worked example) looks like better
-  information than D's flat 0, and using it is reconciliation. This is the leak that actually happens.
+  information than D's number (the csv method's flat 0), and using it is reconciliation. This is the leak that actually happens.
 - **Never renormalize** UP and DOWN to sum to 1: that discards the pool's Invalid estimate and
   reintroduces the `P(valid)` scaling error one step downstream.
 - **Never drop, reorder or merge rows**, including ones with a missing price, no candidate (step 5) or an absurd-looking edge.
@@ -117,7 +117,7 @@ same rule.
 
 ## What this baseline gives up
 
-`w = 1.0` means every pricing error in the CSV is expressed at full size: a repo the CSV scores 0.62 and
+`w = 1.0` means every pricing error in D's forecast (by default, the CSV) is expressed at full size: a repo the CSV scores 0.62 and
 the book prices at 0.4657 (the worked example) gets the whole 0.154 as edge, whether the CSV is right or the book is. And
 somebody is on the other side — a market with real informed traders will take that trade, and the loss
 lands in `review.json` as a Brier score worse than the market's. That is the price of the control arm.

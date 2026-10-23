@@ -1,9 +1,10 @@
 # chain-helper: the read-only chain helper for `deep-r3-trade`
 
 The reference read-only chain helper of `deep-r3-trade` (`steps/I-setup.md` I.2 section 7, the paragraphs that start
-"The allowlist is load-bearing" and "The rules for the helper without `node -e`"). It replaces `node -e` in the
+"The rules for the helper without `node -e`" and "The pipeline check"). It replaces `node -e` in the
 autonomous wake's allow set. It ships in the skill's `scripts/` folder; the operator **reads it in full and installs a
-copy** (Install, below); the agent does not install or edit it.
+copy** (Install, below), or a routine's `node r3.cjs install` lays the copy down from the commit the routine's prompt
+pins; the agent does not install or edit it by hand.
 
 This file is `chain-helper.README.md`; the signer's is `signer.README.md`.
 
@@ -38,7 +39,7 @@ This file is `chain-helper.README.md`; the signer's is `signer.README.md`.
 
 ## Install
 
-1. Create a folder **outside the project folder** and outside every `Write` or `Edit` path the wrapper grants, for
+1. Create a folder **outside the project folder** and outside every `Write` or `Edit` path a run grants, for
    example `~/r3-tools/` (`%USERPROFILE%\r3-tools\` on Windows).
 2. Copy `chain-helper.cjs` into it, and copy `chain-helper.config.example.json` next to it as
    **`chain-helper.config.json`** (exactly that name). Edit `signerAddress` to the pinned holder address (the public
@@ -48,8 +49,10 @@ This file is `chain-helper.README.md`; the signer's is `signer.README.md`.
    `npm install ethers@6.17.0`, one command at a time (the same in every shell). (A copy
    inside the project finds `ethers` only through the project's `node_modules`, and the helper refuses to run from
    inside the project folder; an installed copy outside the project needs its own `ethers`.)
-4. Put the path in both wrappers: `Bash(node <chain helper path> *)` and `PowerShell(node <chain helper path> *)`,
-   where `<chain helper path>` is the full path to `chain-helper.cjs` (`steps/I-setup.md` section 7). Run it from the
+4. The trading routine needs no tool entry for it: the planner starts the helper as its own child process under
+   `r3.cjs trade` (`steps/I-setup.md` I.2 section 7). For supervised sessions, allow
+   `Bash(node <chain helper path> *)` (and `PowerShell(node <chain helper path> *)` where the session uses
+   PowerShell), where `<chain helper path>` is the full path to `chain-helper.cjs`. Run it from the
    **project root**: every `./run/...` path is relative to the current directory.
 5. Smoke test, from the project root: `node <chain helper path> chain-id` prints `{"chain_id":10,"expected":10,"ok":true}`.
 

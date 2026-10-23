@@ -5,16 +5,16 @@ and install (`steps/I-setup.md` I.2 section 7). It has never been run against th
 rules in `steps/I-setup.md` (I.1 sections 2 and 7, I.2 sections 1, 5, 6 and 7), `steps/G-mint-and-trade.md`
 (section 8) and `SKILL.md` (*Two modes*). It was exercised only with a throwaway key it generated itself and a
 local mock JSON-RPC server, plus read-only reads of the live chain (see *Verification record*). The agent does not
-hold, read or need the real keystore, and never installs or edits this file; you review it, you copy it outside the
-project folder, you record its hash.
+hold, read or need the real keystore, and never installs or edits this file by hand; you review it, you copy it outside
+the project folder (in a routine, `node r3.cjs install` copies it from the pinned commit), you record its hash.
 
 One file on purpose: `autonomy.signer_sha256` pins ONE file (I.1 section 7, I.2 section 7), so everything that can
 sign lives in `signer.cjs`. Its only dependency is `ethers` 6.17. Plain Node 22, CommonJS, Windows, macOS and Linux.
 
 | | |
 |---|---|
-| Restricted subcommands (the autonomous allow rule names exactly these) | `check <file>`, `simulate <file>`, `send <file> [--nonce <n>]` |
-| Supervised subcommands (**not** matched by `node <signer> send\|simulate\|check *`, so each one prompts the human) | `info`, `reconcile`, `clear-nonce <n>`, `sweep-token <token> [--amount <raw>]`, `sweep-eth --amount <wei>`, `allowlist-init ...` |
+| Restricted subcommands (the ones the planner starts) | `check <file>`, `simulate <file>`, `send <file> [--nonce <n>]` |
+| Supervised subcommands (the planner never starts them: a human runs them in a supervised session, where each call prompts) | `info`, `reconcile`, `clear-nonce <n>`, `sweep-token <token> [--amount <raw>]`, `sweep-eth --amount <wei>`, `allowlist-init ...` |
 | Signer facts to record | `signer_mode: "local-encrypted-eoa"`, `atomic_batches: false` (one call per `send`), `nonce_pinning: true` only after the setup nonce test passes (7.4; the `nonce_pinning` that `info` prints is this signer's capability, not that result), reports `input_hash` at broadcast |
 
 ## 1. What it guarantees, and where each guarantee lives
@@ -39,7 +39,7 @@ sign lives in `signer.cjs`. Its only dependency is `ethers` 6.17. Plain Node 22,
   beside the input or a look-alike config in the working directory is never read, so it is ignored, not refused).
   On top of that, each of the three kinds is refused with the distinct allowlist refusal (`rule: "mode-switch"`)
   before any signature, instead of being silently ignored.
-* **Everything it trusts is pinned outside the project folder**: the signer itself (hashed by the wake's wrapper), its
+* **Everything it trusts is pinned outside the project folder**: the signer itself (hashed by `r3.cjs trade`), its
   `signer.config.json` next to it, the allowlist (sha256 in the config), the send-lock, the log, the key material. The
   signer refuses to start when any of them is inside `projectRoot`.
 * **Key handling.** The unlock secret and the keystore are read only inside the signing process, only after every
@@ -72,19 +72,16 @@ sign lives in `signer.cjs`. Its only dependency is `ethers` 6.17. Plain Node 22,
 8. Deny rules (I.1 section 2): the list there names `~/.deep-r3-signer.dpapi`, `~/.foundry/keystores/**` and the
    placeholder `Read(<keystore and unlock folder>/**)`. Replace the placeholder with the folder (two entries if they
    differ) of `keystorePath` and `unlockPath`; the bundled wallet's store, named in the public `run/wallet.json`, is in
-   neither default location. Put it in settings and in both wrappers' `--disallowedTools`, identical in both. The
-   signer's own folder, config and allowlist should be unreadable to the agent as well where the OS allows it; its
-   log is the exception (it holds no key material, and the run reads it to settle a nonce, I.1 section 7); the wake's
-   `Write` and `Edit` are already limited to `./run/**`.
-9. Read-only (I.1 section 7, *The hash pins one file*): the wrapper hash covers `signer.cjs` only, so install the
-   folder (`signer.cjs`, `signer.config.json`, `node_modules/ethers` and the allowlist file) read-only for the account
-   the wake runs as, with the operating system's own file permissions, and record the date as
-   `autonomy.signer_checks.folder_read_only_at`. The send-lock and the log (`sendLockPath`, `logPath`) are written by
-   the signer on every send, so point them at a separate, writable folder outside the project.
-10. Env-prefix check (I.1 section 7, section 9 below): once the allow rule is added, in a supervised session, run a
-    zero-amount burn-spender `send` prefixed with `NODE_OPTIONS=--no-warnings`. Pass only if Claude Code prompted and
-    the human declined, or denied it, with no signer output; any signer output or exit code means it ran (fail). Record
-    `autonomy.signer_checks.env_prefix_not_matched_at` on a pass; `schedule.signer_allow_rule_added_at` is set only then.
+   neither default location. Put it in settings. A routine's install writes the key files to `routine.config.json`'s
+   `keysDir` (`~/.r3-signer-keys` by default), which the trading routine's denied tools name
+   (`Read(~/.r3-signer-keys/**)`, `steps/I-setup.md` I.2 section 7); a `Read` deny rule does not cover what a shell
+   command reads, so it is one layer, not a wall. The signer's own folder, config and allowlist should be unreadable
+   to the agent as well where the OS allows it; its log is the exception (it holds no key material, and the run reads
+   it to settle a nonce, I.1 section 7); the trading routine denies `Write` and `Edit` altogether.
+9. The hash pins one file (I.1 section 7, *The hash pins one file*): `r3.cjs`'s hash check covers `signer.cjs` only.
+   In a routine, `node r3.cjs install` writes the folder fresh at every run from the pinned commit, not read-only. The
+   send-lock and the log (`sendLockPath`, `logPath`) are written by the signer on every send, so point them at a
+   separate, writable folder outside the project (`install` uses `routine.config.json`'s `stateDir`).
 
 ## 3. `signer.config.json`
 
@@ -103,8 +100,8 @@ All paths are absolute. See `signer.config.example.json`.
 | `unlockPath` / `unlockService` / `unlockAccount` | Where the password comes from, per `signerMode`. |
 | `allowlistPath` | The policy file, outside the project. |
 | `allowlistSha256` | sha256 of that file, as printed by `allowlist-init`. A different hash is a refusal (`allowlist-hash-mismatch`) in `check`, `simulate` and `send`, before any RPC call. |
-| `sendLockPath` | The send-lock (section 6). Put this path in both wrappers' `<signer send-lock>` placeholder. |
-| `logPath` | Append-only JSON-lines log of broadcast intents and outcomes (section 6). Put this path in both wrappers' `<signer log>` placeholder; the run reads it, so keep it readable. |
+| `sendLockPath` | The send-lock (section 6). A routine's `node r3.cjs install` puts it in `routine.config.json`'s `stateDir`, and `r3.cjs trade` logs one left over at its start. |
+| `logPath` | Append-only JSON-lines log of broadcast intents and outcomes (section 6). A routine's install puts it in `stateDir`, and `r3.cjs trade` writes its path to `run/wake-deep-r3.log` at every start; the run reads it, so keep it readable. |
 | `receiptTimeoutSec`, `receiptPollMs`, `rpcTimeoutMs`, `rpcRetries`, `rpcBackoffMs` | Optional tuning (defaults 120, 2000, 20000, 4, 1000). |
 
 ## 4. The allowlist file
@@ -296,7 +293,7 @@ $ node signer.cjs send run/in.json
 (exit 4)
 ```
 
-### Supervised entry points (never matched by the autonomous allow rule)
+### Supervised entry points (never started by the planner)
 
 `reconcile` settles the send-lock a killed or unconfirmed send left behind (statuses `no-lock`, `in-progress`, `cleared`, `landed`, `reverted`, `superseded`, `pending-or-unsent`):
 ```
@@ -373,7 +370,8 @@ for a call the RPC gave no `maxUsedGas`, never `gasUsed` x 1.2).
   when nothing was broadcast (refusal, nonce-too-low, failed simulation). **Left in place** when a send ends
   `unconfirmed` or the process is killed after the intent: a held lock makes `send` refuse with
   `{"refused":"send-lock"}` (exit 4) until `node signer.cjs reconcile` clears it. `reconcile` and `clear-nonce` are
-  supervised entry points: they never match the autonomous allow rule, so they prompt the human (I.2 section 6(e)).
+  supervised entry points: the planner never starts them, and a human runs them in a supervised session, where each
+  call prompts (I.2 section 6(e)).
 * **Hash at broadcast.** Before the single `eth_sendRawTransaction` the signer appends `broadcast-intent` (hash, nonce,
   `input_hash`) to `logPath`, rewrites the lock with the same fields, and prints `{"event":"broadcast", ...}` on stdout
   with the transaction `hash`, its `nonce` and `input_hash`; the write is synchronous, so the line is on the pipe before
@@ -417,7 +415,11 @@ The `rule` this signer returns, by I.1's case number: (1) `token-transfer`; (2) 
 (4) and (5) `recipient`; (6) `receiver`; (7) `swap-pair`, once per swap function; (8) `swap-fee-tier`, once per swap
 function; (9) `psm3-pair`; (10) `router-market`; (11) `native-value`; (12) `selector`; (13) `eip712`; (14) `eip7702`;
 (15) `approval-spender` with the `index` of the bad call (`check` takes a list: three calls, the third a burn-spender
-approve, gives `index: 2`); (16) is accepted, `{"allowed":true}`, exit 0.
+approve, gives `index: 2`); (16) is accepted, `{"allowed":true}`, exit 0. Save each case's input as
+`run/<setup run-id>/selftest/case-NN.json`, numbered in the list's order, and the results beside them as `results.json`
+(`{at, signer, cases: [{case, expected, exit, got, pass}]}`, `expected` a rule, `<rule>@<index>` or `allowed`): then
+`node r3.cjs selftest --cases <that folder>` replays them through a new install's `check`, as a routine's install needs
+(`steps/I-setup.md` I.2 section 7).
 
 Optional, same procedure: an input `"chainId": 1` -> `chain-id`; a changed allowlist byte -> `allowlist-hash-mismatch`.
 
@@ -443,12 +445,14 @@ with no hash, no broadcast intent and no send-lock that survives it. This signer
 
 ## 8. Wiring it into the skill
 
-* Allow rule (I.2 section 1, second question): `Bash(node <signer path> send *)`, `Bash(node <signer path> simulate *)`,
-  `Bash(node <signer path> check *)` and the same three as `PowerShell(...)`. `<signer path>` is the absolute path of
-  `signer.cjs`. `reconcile`, `clear-nonce`, `sweep-*`, `info` and `allowlist-init` are not matched by any of them.
-* Wrappers: replace `<signer send-lock>` with `sendLockPath`, `<signer log>` with `logPath` and
-  `<keystore and unlock folder>` (in `--disallowedTools`) with the folder of `keystorePath` and `unlockPath`;
-  `autonomy.signer_path` / `autonomy.signer_sha256` as in 7.
+* The trading routine (`steps/I-setup.md` I.2 section 7): `node r3.cjs install` writes this signer's
+  `signer.config.json` itself, in `password-file` mode, with the key files in `keysDir` and the send-lock and the log
+  in `stateDir` (`routine.config.json`), and refuses (exit 4) when `signerDir` already holds a signer of another mode;
+  the routine's tools name no signer command, and the second question (I.2 section 1) adds no rule: the signer runs as
+  the planner's child process under `r3.cjs trade`; `autonomy.signer_path` / `autonomy.signer_sha256` as in 7, which
+  `r3.cjs trade` accepts only for this install's `<signerDir>/signer.cjs`.
+* The skill adds no allow rule for the signer anywhere. In a supervised session each signer call prompts the human,
+  who reads the whole command, an environment-variable prefix included; never allow `node <signer path> …` by rule.
 * Supervised exit: swap sUSDS to USDC with `send` (PSM3 `swapExactIn`, receiver = holder, is on the allowlist in both
   directions), then `sweep-token <USDC>` sends to `owner` and nowhere else; `sweep-eth --amount <wei>` for the gas
   remainder. Clearing a stuck nonce (I.2 section 6): `clear-nonce <n>`. There is no `swapExactOut` path and no
@@ -456,18 +460,20 @@ with no hash, no broadcast intent and no send-lock that survives it. This signer
 
 ## 9. What this does not do (read before adopting it)
 
-* **The allow rule is the first line of defence and it is not in this file.** The signer only runs unattended if
-  Claude Code lets `node <signer path> send ...` through; an env-var prefix such as `NODE_OPTIONS=--require=./run/x.js
-  node <signer> ...` must NOT match that rule, and nothing in this build proves it: the operator verifies it in a
-  supervised session at setup and records it (I.1 section 7, `autonomy.signer_checks.env_prefix_not_matched_at`).
+* **The first lines of defence are not in this file.** In the trading routine the planner starts the signer as a
+  child process that no Claude Code rule sees; there who can push to the trading repository and what loads at
+  session start, the code pin in the routine's prompt, the routine's tool lists and auto mode's classifier,
+  `r3.cjs`'s gates and refusals, the agent's instructions, and your claude.ai and GitHub accounts stand in front of
+  it (`steps/I-setup.md` I.2 section 7). In a supervised session each signer call prompts the human.
   Inside the process the signer refuses a
   `--require`, `-r`, `--import` or `--loader` in `NODE_OPTIONS` or in node's own flags, `NODE_TLS_REJECT_UNAUTHORIZED=0`,
   and an `ethers` that resolves inside the project folder, with the `mode-switch` refusal. **That check is advisory
   against a preload, not a control**: a preload runs before the signer does and can rewrite the signer's own checks.
-* **The hash covers one file.** The wake's wrapper hashes `signer.cjs`. Its correctness also depends on `ethers` in
+* **The hash covers one file.** `r3.cjs trade` hashes `signer.cjs`. Its correctness also depends on `ethers` in
   `node_modules`, on `signer.config.json` and on the allowlist (hash-pinned by the config, so only the config and
-  `node_modules` are unpinned). The operator installs the whole folder read-only for the account the wake runs as and
-  records it at setup (I.1 section 7, `autonomy.signer_checks.folder_read_only_at`); no wrapper code checks it.
+  `node_modules` are unpinned). In a routine, `node r3.cjs install` writes `signer.cjs`, its config and the allowlist fresh at every run,
+  not read-only, from the commit the routine's prompt pins, with `ethers` 6.17.0 from the npm registry (exact version,
+  `--ignore-scripts`, no lockfile).
 * **"Exact" approvals are not verifiable at signing time**: only `type(uint256).max` is refused; the signer cannot know
   what amount a group needs, and an amount limit is out of scope by owner policy. Exactness is the run's duty
   (I.1 section 7, the approval row; I.1 section 8 *ALLOWANCES*).
@@ -514,6 +520,6 @@ on 2026-10-08 on exactly the two files hashed here.
   split: `0x0`, `SUsds/insufficient-balance`, exit 1).
 * Not exercised: a real broadcast (forbidden for this build), the macOS `keychain` and Linux `secret-service` unlock paths (their
   commands are asserted against a stubbed process runner), Windows DPAPI **was** exercised with a throwaway password.
-* Not verified by this build: that Claude Code's allow-rule matching rejects an environment-variable prefix on
-  `node <signer path> send *`. The operator verifies and records it at setup (I.1 section 7; see section 9).
+* Not verified by this build: how Claude Code's allow-rule matching treats an environment-variable prefix. The
+  skill adds no allow rule for the signer (section 8), so nothing here depends on it.
 

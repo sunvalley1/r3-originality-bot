@@ -81,7 +81,7 @@ NONCE         the nonce `inflight.json` recorded is settled by §8 step 4's thre
               nonce is still pending no recovery is built and nothing is sent (§8 step 4)
 LOCK          the lock `./run/.lock.deep-r3-trade` (`I-setup.md` §I.2) keeps a second run off the holder
               meanwhile; every sending session, supervised too, holds it with exclusive create before any
-              repair or send (the scheduled run through its wrapper), and while another live owner holds
+              repair or send (the scheduled run through `r3.cjs trade`), and while another live owner holds
               it refuses to send or repair, and says so
 ```
 
@@ -805,17 +805,17 @@ signed, never how much or how often: no amount, count, frequency or time limit. 
 address tables, never from fetched data; the full table and the setup self-test (its one case list, its
 order and its record) are in `I-setup.md` I.1 §7. The self-test goes through the signer's policy-only entry
 point, `checkPolicy` above, and through `send` only for the mode-switch attempts, which must return the
-distinct allowlist refusal before signing. Every subcommand the allow rule names (`send`, `simulate`,
-`check`) **always** applies the allowlist, refuses every off-chain signature and EIP-7702 authorization,
-and never prints signed transaction bytes; no mode-switch (`I-setup.md` I.1 §7 defines it) switches any of
-this off. Off-allowlist actions in supervised mode (`I-setup.md` I.1 §5's exit to the
-human's own address, the sweep) go through a separate entry point the allow rule does not match, so each
-one prompts the human in Claude Code. The
+distinct allowlist refusal before signing. Every restricted subcommand the planner starts (`send`,
+`simulate`, `check`) **always** applies the allowlist, refuses every off-chain signature and EIP-7702
+authorization, and never prints signed transaction bytes; no mode-switch (`I-setup.md` I.1 §7 defines it)
+switches any of this off. Off-allowlist actions in supervised mode (`I-setup.md` I.1 §5's exit to the
+human's own address, the sweep) go through a separate entry point that the planner never starts and only a
+supervised session runs, so each one prompts the human in Claude Code. The
 98×3 DOWN, UP and child-Invalid addresses and the 196 swap fee tiers are derived and pinned when the operator
 builds the signer's allowlist, from onchain reads, never from the data function or any other fetched body
 (`I-setup.md` I.1 §7 has the derivation, the tier rule and the builder). That
 allowlist file and its reference hash live outside `./run/`, outside the project folder and outside every
-Write or Edit path the wrapper grants — e.g. beside the signer itself; the signer verifies the file against
+Write or Edit path a run grants — e.g. beside the signer itself; the signer verifies the file against
 the hash kept with it and refuses to sign on a mismatch.
 Without a signer that passes the setup self-test autonomous mode stays off (`autonomy.blocked: needs-wallet`), and the agent
 never writes key-handling code to fill the gap.
@@ -935,7 +935,7 @@ never writes key-handling code to fill the gap.
      which is why it is recommended (in a supervised run; a scheduled run's planner is sequential on every
      signer, *Atomic signer* above).
 
-**Runs that die mid-way.** A crash, the time limit or `--max-turns` can stop a run anywhere, so:
+**Runs that die mid-way.** A crash or the time limit can stop a run anywhere, so:
 
 - **Status first.** A scheduled run's `./run/<run-id>/wake-status.json` is written with status `aborted` when the run
   starts and overwritten with the final status at the end (`I-setup.md` §I.2) — or left `aborted`, which
@@ -970,7 +970,7 @@ never writes key-handling code to fill the gap.
   unsettled `inflight.json`: both in `I-setup.md` I.2 §6.
 - **A supervised session's marker.** A supervised session keeps `./run/<run-id>/session-owner.json`,
   `{pid, process_start_time}`, for its whole lifetime and removes it at exit (local bookkeeping); a run-id
-  with a live marker is off-limits to the scheduled run's start-of-run repair and Half B. **The wrapper
+  with a live marker is off-limits to the scheduled run's start-of-run repair and Half B. **`r3.cjs trade`
   decides what is live, never the model:** before it starts the run it writes
   `./run/.lock.deep-r3-trade/live-runs.txt` (`I-setup.md` I.2 §7), one run-id per line, empty when there is
   none, gone with the lock, listing each run-id whose marker exists, whose `pid` is alive and whose
@@ -984,13 +984,12 @@ never writes key-handling code to fill the gap.
   it once. The marker always names the long-lived Claude Code process, never the lock's sending process (an
   executor child, say).
 - **Room to finish.** Every signer call sends exactly one transaction: an atomic batch is one transaction
-  and one call, a non-atomic group is k calls (step 4), so no turn or time limit can stop inside a
-  transaction the bookkeeping has not seen. The turn and time
-  budget is `I-setup.md` I.2 §7's rule: it sizes `--max-turns` and the execution time limit and records
-  both. The run counts its own tool calls, reads `started_at` from the lock's owner file and, before each
-  group, checks that the remaining turns and time cover that whole group — all k signer calls plus their
+  and one call, a non-atomic group is k calls (step 4), so no time limit can stop inside a
+  transaction the bookkeeping has not seen. The time budget is `I-setup.md` I.2 §7's rule: the run's limit is
+  `schedule.time_limit_hours`, and the planner keeps a 10-minute reserve. The planner reads `started_at` from the
+  lock's owner file and, before each group, checks that the remaining time covers that whole group — all k signer calls plus their
   bookkeeping writes (`inflight.json`, the attempt list, the `fills.json` rows); if not, it skips that group and
-  every later one (`status: "skipped"`, *Output*), reports them, and continues to Half B. The turn limit never
+  every later one (`status: "skipped"`, *Output*), reports them, and continues to Half B. The time limit never
   cuts a group in half. Half B gets the same check before every step (`I-setup.md` I.2 §2, §7): its
   session-2 sends (merges, redeems) run before H, H runs only on run-ids with no `review.json` yet or a market newly settled
   since their last one, and not listed in `./run/.lock.deep-r3-trade/live-runs.txt` (*A supervised session's marker*), and a reserve is kept for the final `wake-status.json` and `report.md`
@@ -1072,7 +1071,7 @@ signer emits the
 transaction hash at broadcast, before it
 waits for the receipt (the bundled CLI logs a `broadcast-intent` line), but a blocking send call returns
 it to the run only when the call exits: the signer's own log is authoritative for `tx_hash` (read it at
-a repair before comparing any input; its path is the `log_path` the signer prints, and the wrappers name it in
+a repair before comparing any input; its path is the `log_path` the signer prints, and `r3.cjs trade` names it in
 `run/wake-deep-r3.log` at every start, `I-setup.md` I.1 §7; its lines carry `input_hash`, never the data), so copy it, and an atomic batch's `input_hash` as its
 `calldata_hash`, into `inflight.json` and the attempt list from that log (only a line within step 4's scope: at or
 after that run-id's start, matched on (nonce, `input_hash`)), or from the call's output, once
@@ -1244,7 +1243,7 @@ sharing its lowercased `address` the same way — never route a surviving pair l
 in autonomous mode, §1's not-yet-started groups found stale after the run's first broadcast (and every later group),
 §8's groups whose pre-send simulation failed (and every later group, *A failing pre-send simulation*),
 §8's groups refused before broadcast by the signer or the harness (and every later group, step 4), and
-groups not started for lack of turns or time (§8, *Runs that die mid-way*), the same way — the reason in `error`, `filled` `0`; a held side is never a reason (§1). Each row is appended
+groups not started for lack of time (§8, *Runs that die mid-way*), the same way — the reason in `error`, `filled` `0`; a held side is never a reason (§1). Each row is appended
 as it lands — a sent row, with its `tx_hash`, right after its receipt, not at the end of the run (§8,
 *Runs that die mid-way*). This vocabulary and `../../seer-trade/steps/G-execute-trade.md`'s name the same shapes with different words
 (`simple-buy` ≡ `direct`, `complex-buy` ≡ `split`, `buy-and-merge` ≡ `merge-arb`, `set-sell` ≡ `set-sell`), and the mapping

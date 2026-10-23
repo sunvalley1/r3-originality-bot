@@ -4,7 +4,11 @@
 // defines and prints ONE JSON summary line. Read scripts/planner.README.md before installing it.
 //
 //   node <planner path> c <run-id>                       C-select: candidates.json
-//   node <planner path> d <run-id>                       D, the stored CSV: base-forecast.json
+//   node <planner path> blind <run-id>                   D's AI research: the price-free Reality.eth state the research
+//                                                        workers read (onchain-state.blind.json)
+//   node <planner path> d <run-id>                       D: base-forecast.json by the configured method (forecastMethod:
+//                                                        csv, the default, the stored CSV; forecast-file, or ai, a
+//                                                        forecast file any source wrote)
 //   node <planner path> d <run-id> --supply <csv> [--continue] [--notes <text>]
 //                                                        D, a CSV a human supplies in a supervised session
 //   node <planner path> e <run-id>                       E: blended.json
@@ -38,6 +42,7 @@ const { EXIT, PlannerError } = lib;
 // The grammar: positional <run-id>, then the flags each subcommand accepts. `value` flags take one argument.
 const GRAMMAR = {
   c: { flags: {} },
+  blind: { flags: {} },
   d: { flags: { '--supply': 'value', '--continue': 'bool', '--notes': 'value' } },
   e: { flags: {} },
   f: { flags: { '--provisional': 'bool' } },

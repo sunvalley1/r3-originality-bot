@@ -1,0 +1,2 @@
+# The signer's allowlist is hashed byte for byte (routine.config.json allowlistSha256): never convert its line endings.
+setup/r3-allowlist.json -text

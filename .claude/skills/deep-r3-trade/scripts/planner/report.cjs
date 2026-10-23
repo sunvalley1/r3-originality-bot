@@ -61,7 +61,10 @@ async function run(ctx) {
   L.push('## Half A (today\'s entry)', '');
   const step = (name, s, ok) => L.push(`- **${name}**: ${!s ? 'not run' : s.ok === false || s.stop ? stopText(s) : ok(s)}`);
   step('C', c, (s) => `candidates.json, ${s.candidates} rows (${s.tradeable} tradeable), source ${s.source}`);
-  step('D', d, (s) => `base-forecast.json, ${s.forecasts} forecasts from CSV v${s.csv && s.csv.version} (${s.csv && s.csv.reused ? 'reused' : 'new'}; matched ${s.csv && s.csv.counts.matched}, no forecast ${s.csv && s.csv.counts.no_forecast})`);
+  const ff = d && d.forecast_file;
+  step('D', d, (s) => (s.source === 'forecast-file'
+    ? `base-forecast.json, ${s.forecasts} forecasts from the forecast file of run ${ff && ff.from_run_id} (method forecast-file; made ${ff && ff.generated_at}${ff && ff.age_hours !== null ? `, ${ff.age_hours} h before this run` : ''}; method text sha256 ${ff && ff.method_sha256 ? ff.method_sha256.slice(0, 16) : '?'}; no forecast ${ff && ff.no_forecast})`
+    : `base-forecast.json, ${s.forecasts} forecasts from CSV v${s.csv && s.csv.version} (${s.csv && s.csv.reused ? 'reused' : 'new'}; matched ${s.csv && s.csv.counts.matched}, no forecast ${s.csv && s.csv.counts.no_forecast})`));
   step('E', e, (s) => `blended.json, ${s.blends} blends (identity)`);
   if (rp) step('PSM3 ramp', rp, (s) => (s.ran ? `sent before F: ${s.assets.map((a) => `${a.amount_in} ${a.asset} (quote ${a.quote_susds} sUSDS, floor ${a.min_amount_out})`).join(', ')}; sUSDS ${s.susds_before} -> ${s.susds_after}; record ${s.record}` : s.reason));
   step('F', f, (s) => `allocation.json, ${s.rows} rows on ${s.markets_with_rows} markets; staked ${s.staked_M} sUSDS of bankroll ${s.bankroll}${s.provisional ? ' (PROVISIONAL: sUSDS + PSM3 minAmountOut of the queued ramp)' : ''}; EV ${s.expected_value}${s.ramp_due && !s.provisional ? '; USDC or USDS still held at F: sized on the sUSDS balance alone (the wake sends the ramp before F; a supervised session sends it on its own yes)' : ''}`);
@@ -136,7 +139,7 @@ async function run(ctx) {
   ctx.writeRun('report.md', L.join('\n') + '\n');
   let ws = null;
   if (W && W.final) {
-    ws = { run_id: rid, started_at: W.started_at, finished_at: lib.nowIso(), status: W.status, stopped_at_step: W.stopped_at_step || 'H', cadence_hours: W.cadence_hours === undefined ? null : W.cadence_hours, bankroll: f && f.bankroll !== undefined ? f.bankroll : null, positions_sent: F ? F.runs.filter((r) => r.tx_hash && ['filled', 'partial'].includes(r.status) && !['mint', 'consumed'].includes(r.side) && !['buy-and-merge', 'redeem'].includes(r.route)).length : 0, h_rescored: W.h_rescored || [], csv: d && d.csv ? { version: d.csv.version, path: d.csv.path, sha256: d.csv.sha256, supplied_at: d.csv.supplied_at, reused: d.csv.reused, counts: d.csv.counts } : null, notes: (W.notes || []).join(' | ') };
+    ws = { run_id: rid, started_at: W.started_at, finished_at: lib.nowIso(), status: W.status, stopped_at_step: W.stopped_at_step || 'H', cadence_hours: W.cadence_hours === undefined ? null : W.cadence_hours, bankroll: f && f.bankroll !== undefined ? f.bankroll : null, positions_sent: F ? F.runs.filter((r) => r.tx_hash && ['filled', 'partial'].includes(r.status) && !['mint', 'consumed'].includes(r.side) && !['buy-and-merge', 'redeem'].includes(r.route)).length : 0, h_rescored: W.h_rescored || [], csv: d && d.csv ? { version: d.csv.version, path: d.csv.path, sha256: d.csv.sha256, supplied_at: d.csv.supplied_at, reused: d.csv.reused, counts: d.csv.counts } : null, forecast_file: d && d.forecast_file ? { from_run_id: d.forecast_file.from_run_id, generated_at: d.forecast_file.generated_at, age_hours: d.forecast_file.age_hours, method_sha256: d.forecast_file.method_sha256, no_forecast: d.forecast_file.no_forecast } : null, notes: (W.notes || []).join(' | ') };
     ctx.writeRunJson('wake-status.json', ws);
   }
   return { report: ctx.rel('report.md'), lines: L.length, wake_status: ws ? { path: ctx.rel('wake-status.json'), status: ws.status } : null };
