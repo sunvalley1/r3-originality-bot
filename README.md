@@ -222,7 +222,9 @@ clear the new commit and update the pin (*Running and checking it*).
 
    Then push this repo into the research repository, with its own `routine.config.json` (the same `signerAddress`,
    `owner`, `allowlistFile` and `allowlistSha256`, because `install` checks the allowlist there too; `forecastImport`
-   empty) and `setup/r3-allowlist.json`. No key and no trading records go there.
+   empty) and `setup/r3-allowlist.json`. No key and no trading records go there. Give it an empty `run/` folder too,
+   committed as an empty `run/.gitkeep` (`git add -f run/.gitkeep`, since `.gitignore` leaves `run/` out). Without
+   it the research routine stops at once with "./run does not exist in the project root".
 7. **Create the cloud environments** in claude.ai's Code settings:
    - *trading*: two environment variables, `R3_KEYSTORE_JSON` (the text of your wallet's encrypted keystore) and
      `R3_KEYSTORE_PASSWORD` (its password, as text), and `BASH_DEFAULT_TIMEOUT_MS` and `BASH_MAX_TIMEOUT_MS` both set
