@@ -587,12 +587,12 @@ node planner.test.cjs --skip-offline --live --helper <chain-helper.cjs> --signer
 - **Where the skill text names the planner**: `steps/I-setup.md` I.2 §7, *The planner*: the trading routine's tool
   entries (`Bash(node r3.cjs install)`, `Bash(node r3.cjs trade --push)` and `Bash(node r3.cjs status)` allowed,
   beside `Read`, the exact `Bash(cd /home/user/<trading repo>)` when two repositories are attached, and the exact
-  pin check `Bash(git diff --quiet --no-ext-diff --no-textconv <commit> HEAD -- . ':(exclude)run')`;
+  pin check `Bash(test "$(git ls-tree HEAD | awk -F '\t' '$2 != "run"' | git mktree)" = <tree>)`;
   `Bash(node r3.cjs planner *)` and `Bash(node r3.cjs planner)` denied, with the rest of that section's list:
   `r3.cjs trade` runs `wake` only; a supervised session runs the other subcommands, `node r3.cjs planner …`, each
   call prompting the human), its hash record (`planner`, with `autonomy.planner_path` and `autonomy.planner_sha256`,
   which `r3.cjs trade` checks before the wake, the path included), the code pin in the trading routine's prompt (the
-  commit `node r3.cjs install` copies the planner from), the `needs-planner` blocker and its clearance (`c`, then
+  tree fingerprint of the commit `node r3.cjs install` copies the planner from), the `needs-planner` blocker and its clearance (`c`, then
   `d`, `e`, `f`, `g --indep` and `exec --check` on a dry run, which `node r3.cjs clearance` runs and records in
   `run/<run-id>/clearance.json`; it passes only on `check-passed`), the tool timeout of the `r3.cjs trade` call, and
   its single `wake` call. `wake` sends the PSM3 ramp itself (between `e` and `f`). The trading routine is kept from

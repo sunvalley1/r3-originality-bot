@@ -157,8 +157,8 @@ I.2   after a green supervised run, the operator's two yeses, a passing signer s
                                                                ->  autonomy + schedule + first_successful_run
 then every autonomous run (interval = CADENCE, declared in I.2 §8), a Claude Code routine whose agent
       first runs its prompt's code-pin check in the trading clone (after a `cd` into it when two
-      repositories are attached; any change outside run/ since the pinned commit, or the commit
-      missing: stop, run nothing), then `node r3.cjs install` and `node r3.cjs trade --push`
+      repositories are attached; any change outside run/ from the pinned tree, or a check that
+      could not run: stop, run nothing), then `node r3.cjs install` and `node r3.cjs trade --push`
       (I.2 §7): r3.cjs first checks autonomy.signer_path and autonomy.planner_path and, if either is
       not this install's path, is missing, or its sha256 differs from autonomy.signer_sha256 or
       autonomy.planner_sha256, logs it, writes wake-status aborted with the reason and exits 4
@@ -262,10 +262,10 @@ used). It then asks for two explicit permissions:
 1. **"Allow autonomous daily trading?"** A yes is recorded as `autonomy.enabled = true` with `authorized_at` in
    `./run/setup.deep-r3-trade.json`. A no keeps supervised mode only, and the skill never asks again unasked.
 2. **"Allow the trading routine to send through the signer without asking?"** The sender is the trading routine
-   (`steps/I-setup.md` I.2 §7): its prompt pins one commit of the trading repository and checks it as the agent's
-   first command in the trading clone (after a `cd` into it when two repositories are attached); its allowed tools
-   are `Read`, `Bash(cd /home/user/<trading repo>)` (two repositories only), the exact pin check
-   `Bash(git diff --quiet --no-ext-diff --no-textconv <commit> HEAD -- . ':(exclude)run')`,
+   (`steps/I-setup.md` I.2 §7): its prompt pins the code of one commit of the trading repository by its tree
+   fingerprint and checks it as the agent's first command in the trading clone (after a `cd` into it when two
+   repositories are attached); its allowed tools are `Read`, `Bash(cd /home/user/<trading repo>)` (two repositories
+   only), the exact pin check `Bash(test "$(git ls-tree HEAD | awk -F '\t' '$2 != "run"' | git mktree)" = <tree>)`,
    `Bash(node r3.cjs install)`, `Bash(node r3.cjs trade --push)` and `Bash(node r3.cjs status)`; its denied tools are
    `Bash(node r3.cjs planner *)`, `Bash(node r3.cjs planner)`, `Read(~/.r3-signer-keys/**)`, `Read(//proc/**)`,
    `Read(//home/user/<research repo>/**)`, `Write`, `Edit`, `NotebookEdit`, `Glob`, `Grep`, `Skill`, `WebFetch`,
@@ -324,10 +324,11 @@ schedule (`steps/I-setup.md` I.2 §7), working on the operator's private **tradi
 method it attaches that repository alone and its session starts inside the clone. Under `forecast-file` with the
 research routine it also attaches the research repository; a session with several repositories starts in the folder
 above the clones (`/home/user/<repository name>` in the cloud), so the prompt's first command is
-`cd /home/user/<trading repo>`, and the Bash tool's working directory stays there. Its prompt pins one commit of the
-trading repository, and the agent's first command in the trading clone is
-`git diff --quiet --no-ext-diff --no-textconv <pinned commit> HEAD -- . ':(exclude)run'`: on exit 1 (the code
-differs) or any other non-zero exit (the pinned commit is not in the clone) the agent stops and reports the exit
+`cd /home/user/<trading repo>`, and the Bash tool's working directory stays there. Its prompt pins the code of one
+commit of the trading repository by its tree fingerprint (the git tree of everything outside `run/`, which needs no
+history in the routine's shallow clone), and the agent's first command in the trading clone is
+`test "$(git ls-tree HEAD | awk -F '\t' '$2 != "run"' | git mktree)" = <pinned tree>`: on a non-zero exit (1: the code differs, or
+git could not compute the fingerprint and printed an error) the agent stops and reports the exit
 code, and reads and runs nothing else. The pin cannot cover what Claude Code loads at session start: with one
 repository, the clone's `.claude/settings.json` (permission rules, hooks, environment) and `.mcp.json`; in both cases,
 each clone's `CLAUDE.md`, `.claude/rules/`, `.claude/skills/`, `.claude/agents/` and `.claude/commands/`. So only the
