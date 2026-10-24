@@ -521,6 +521,18 @@ async function gatesSection(W) {
       ok(!(r.stdout + r.stderr).includes(KEY_PASSWORD), 'the password was printed');
     } finally { clearRuns(P); setPlan(P, {}); }
   });
+  // A cloud session sets CLAUDE_AUTOCOMPACT_PCT_OVERRIDE itself; its name trips the signer's environment tripwire, so
+  // on 24 Oct 2026 G's check refused all 491 transactions of the first cloud clearance.
+  await test('trade: Claude Code\'s own variables (CLAUDECODE, CLAUDE_*) never reach the planner\'s wake', async () => {
+    const r = await r3(W, P, ['trade'], { env: { ...KEYS_ENV, CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: '50', CLAUDECODE: '1', CLAUDE_CODE_ENTRYPOINT: 'remote' } });
+    try {
+      ok(r.code === 0 && r.j.status === 'completed', say(r));
+      const c = plannerCalls(P).pop();
+      const leaked = c.env_keys.filter((k) => /^CLAUDE(CODE$|_)/i.test(k));
+      ok(c.argv[0] === 'wake' && !leaked.length, `routine.cjs bug: ${leaked.join(', ')} reached the planner's wake`);
+      ok(c.env_keys.includes('R3TEST_MARKER'), 'the rest of the environment did not reach the planner');
+    } finally { clearRuns(P); }
+  });
   await test('trade: pins recorded in upper case still match (sha256 compared case-insensitively)', async () => {
     const a = autonomyOf(P); setupRecord(P, { signer_sha256: a.signer_sha256.toUpperCase(), planner_sha256: a.planner_sha256.toUpperCase() });
     const r = await r3(W, P, ['trade']);
