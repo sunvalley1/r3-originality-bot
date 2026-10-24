@@ -226,7 +226,9 @@ clear the new commit and update the pin (*Running and checking it*).
 7. **Create the cloud environments** in claude.ai's Code settings:
    - *trading*: two environment variables, `R3_KEYSTORE_JSON` (the text of your wallet's encrypted keystore) and
      `R3_KEYSTORE_PASSWORD` (its password, as text), and `BASH_DEFAULT_TIMEOUT_MS` and `BASH_MAX_TIMEOUT_MS` both set
-     to `21600000` (6 hours, a run's time limit). They are not secrets: every command in every session of this
+     to `21600000` (6 hours, a run's time limit). Put each on one line, the two key values in single quotes
+     (`R3_KEYSTORE_JSON='{"crypto":…}'`). It is the keystore file's text, never the raw private key, which
+     `install` refuses. They are not secrets: every command in every session of this
      environment can read them, and so can anyone who uses the environment. Use this environment for the trading
      routine alone, never make it your default, start no other session in it, and never continue a trading run's
      session. Its network allows `mainnet.optimism.io`, `deep.seer.pm`, GitHub and the npm registry. If your

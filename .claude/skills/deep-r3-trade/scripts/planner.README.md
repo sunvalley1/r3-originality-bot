@@ -648,6 +648,11 @@ after one.
 | `planner.config.example.json` | `ec6c35f8243941e66a464bc2551e9aa4d631701749b0bd30aa491b20d81e5fbe` |
 | `planner.test.cjs` | `5b7748e4c0b6d65d6a8343be78fd9024799a184543637d6068a5a5901971e259` |
 
+- **2026-10-24, the runner only.** The first cloud clearance stopped in G: a Claude Code cloud session sets
+  `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`, whose name trips the signer's environment tripwire, and G's check refused all 491
+  transactions on it. `routine.cjs` now keeps Claude Code's own variables (`CLAUDECODE`, `CLAUDE_*`) out of every
+  tool's environment, as it keeps the key variables out. No file hashed above changed. `routine.test.cjs`: 58 passed,
+  0 failed (the new case fails on the old runner).
 - **2026-10-23, an AI agent in the loop: D's `forecast-file` method and the routines.** New since 2026-10-19:
   `planner/blind.cjs` (the price-free Reality.eth reads of a research run-id); `d.cjs`'s `forecast-file` method
   (`forecastMethod`, `ai` being its first name: a forecast file at most `forecastMaxAgeHours` old, from any source,

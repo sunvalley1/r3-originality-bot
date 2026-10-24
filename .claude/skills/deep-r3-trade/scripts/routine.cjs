@@ -67,8 +67,10 @@ const home = (p) => (p === '~' ? os.homedir() : typeof p === 'string' && /^~[\\/
 const iso = () => new Date().toISOString();
 const clip = (s, n) => { const t = String(s === undefined || s === null ? '' : s); return t.length > n ? t.slice(0, n) + '...' : t; };
 function log(line) { try { fs.mkdirSync(RUN, { recursive: true }); fs.appendFileSync(LOG, `[${iso()}] ${line}\n`); } catch (e) { /* the log is best effort */ } }
-// the tools' child processes never get the key's environment variables: install has written what the signer reads
-const childEnv = () => { const e = { ...process.env }; for (const k of Object.keys(e)) if (/^R3_KEYSTORE_(JSON|PASSWORD)$/i.test(k)) delete e[k]; return e; };
+// the tools' child processes never get the key's environment variables: install has written what the signer reads.
+// Nor Claude Code's own variables, which no tool reads: a cloud session sets CLAUDE_AUTOCOMPACT_PCT_OVERRIDE, whose
+// name trips the signer's environment tripwire (OVERRIDE), and G's check refused every transaction on it (24 Oct 2026).
+const childEnv = () => { const e = { ...process.env }; for (const k of Object.keys(e)) if (/^R3_KEYSTORE_(JSON|PASSWORD)$/i.test(k) || /^CLAUDE(CODE$|_)/i.test(k)) delete e[k]; return e; };
 const readJson = (p) => JSON.parse(fs.readFileSync(p, 'utf8').replace(/^﻿/, ''));
 function readSetup() { try { return readJson(SETUP); } catch (e) { return null; } }
 
