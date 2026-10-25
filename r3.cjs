@@ -6,7 +6,6 @@
 //   node r3.cjs trade [--push]               one scheduled run (what the trading routine runs)
 //   node r3.cjs clearance [--push]           the no-send check of an install
 //   node r3.cjs selftest --cases <folder> [--push]   the signer self-test, replayed on this install
-//   node r3.cjs research-begin | research-end ...   the AI research, a forecast file for D (what the research routine runs)
 //   node r3.cjs status                       the newest run's final status
 // See routine.cjs's header and steps/I-setup.md I.2 section 7.
 'use strict';

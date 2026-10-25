@@ -1,5 +1,5 @@
 {
-  "_README": "Copy to routine.config.json in your private trading repository, and commit it there. The research repository (only for the AI research) gets a copy of its own with the same signerAddress, owner, allowlistFile and allowlistSha256 (install checks the allowlist there too) and forecastImport empty. It says where `node r3.cjs install` puts the tools and what they talk to. No secret goes in it: the trading routine's environment holds the key as R3_KEYSTORE_JSON and R3_KEYSTORE_PASSWORD, ordinary environment variables that every command in that environment can read (steps/I-setup.md I.2 section 7). Keys starting with an underscore are ignored.",
+  "_README": "Copy to routine.config.json in your private trading repository, and commit it there. It says where `node r3.cjs install` puts the tools and what they talk to. No secret goes in it: the trading routine's environment holds the key as R3_KEYSTORE_JSON and R3_KEYSTORE_PASSWORD, ordinary environment variables that every command in that environment can read (steps/I-setup.md I.2 section 7). Keys starting with an underscore are ignored.",
 
   "signerAddress": "0x0000000000000000000000000000000000000001",
   "_signerAddress": "The bot wallet: it signs, pays gas and holds every position.",
@@ -11,20 +11,17 @@
   "allowlistSha256": "0000000000000000000000000000000000000000000000000000000000000000",
   "_allowlist": "The signer's policy file, built once with `node <signer path> allowlist-init` (operator-run), committed in your private copy, and its sha256.",
 
-  "planner": { "forecastMethod": "csv", "forecastMaxAgeHours": 12, "rpcGapMs": 120, "parallel": 1 },
-  "_planner": "D's method: csv (the default: the CSV you supplied) or forecast-file (a forecast file at most forecastMaxAgeHours old, from the research routine or any other source; ai is its first name and still works). rpcGapMs and parallel pace the RPC reads.",
+  "planner": { "rpcGapMs": 120, "parallel": 1 },
+  "_planner": "rpcGapMs and parallel pace the planner's RPC reads.",
 
   "toolsDir": "~/r3-tools",
   "signerDir": "~/.r3-signer-bin",
   "keysDir": "~/.r3-signer-keys",
   "stateDir": "~/.r3-signer-state",
-  "_dirs": "Where the planner and helper, the signer, the key files and the signer's lock and log go. All must be outside the project folder. In the trading repository leave keysDir at ~/.r3-signer-keys: the trading routine's deny rule Read(~/.r3-signer-keys/**) names that folder. install writes the key files there only when R3_KEYSTORE_JSON and R3_KEYSTORE_PASSWORD are both set; elsewhere put keystore.json and password there yourself, or the signer cannot sign. A research clone on the same computer needs its own four folders.",
+  "_dirs": "Where the planner and helper, the signer, the key files and the signer's lock and log go. All must be outside the project folder. In the trading repository leave keysDir at ~/.r3-signer-keys: the trading routine's deny rule Read(~/.r3-signer-keys/**) names that folder. install writes the key files there only when R3_KEYSTORE_JSON and R3_KEYSTORE_PASSWORD are both set; elsewhere put keystore.json and password there yourself, or the signer cannot sign.",
 
   "rpcUrl": "https://mainnet.optimism.io",
   "dataFunctionUrl": "https://deep.seer.pm/.netlify/functions/get-originality-r3-v3-markets-data",
-
-  "forecastImport": "",
-  "_forecastImport": "Under forecast-file with the AI research: the research repository's clone, ../<your research repo> (in the cloud the clones sit side by side under /home/user; it must be outside this project). trade and clearance look only in its run/ folders named like research run-ids (YYYY-MM-DDTHHMMZ-research, or -w2), take the newest research-forecast.json made within forecastMaxAgeHours whose generated_at is an ISO 8601 UTC timestamp, and copy that one file into ./run/<the same research run-id>/, never over a different file; D then checks it like any forecast file. Nothing else is read from the clone. A supervised planner d does not import. Empty: no import (method csv, or a forecast file you commit into this repository yourself).",
 
   "git": { "name": "deep-r3-trade routine", "email": "noreply@localhost", "branch": "main" },
   "_git": "Who commits the run records, and to which branch, when a routine pushes them (--push)."

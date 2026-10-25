@@ -10,7 +10,7 @@
  *
  * Every case runs routine.cjs as a child process (`node r3.cjs <subcommand>`) inside a THROWAWAY project built under
  * the work folder (default: a fresh folder under the OS temp folder; --dir chooses where): a copy of r3.cjs and of this
- * scripts/ folder (routine.cjs reads its siblings by __dirname; the untracked research/ folder is left out), a
+ * scripts/ folder (routine.cjs reads its siblings by __dirname; local folders git does not track are left out), a
  * routine.config.json whose toolsDir, signerDir, keysDir and stateDir are folders under the work folder, and a
  * setup/r3-allowlist.json with its sha256. Nothing runs from the repository itself and nothing touches the real tools,
  * keys or signer state: the children get a minimal environment with HOME and USERPROFILE inside the work folder, an
@@ -284,6 +284,22 @@ async function installSection(W) {
       ok(!(r.stdout + r.stderr).includes(KEY_PASSWORD), 'the password was printed');
     });
   }
+  // A config written before 25 Oct 2026 still holds the forecast-file keys: refused (never silently ignored), by name.
+  await test('install: a config with a key removed on 25 Oct 2026 (forecastImport, planner.forecastMethod, planner.forecastMaxAgeHours) -> exit 2 naming it, nothing installed', async () => {
+    const cfgFile = path.join(P.proj, 'routine.config.json');
+    const cases = [['forecastImport', { ...P.cfg, forecastImport: '' }], ['planner.forecastMethod', { ...P.cfg, planner: { ...(P.cfg.planner || {}), forecastMethod: 'csv' } }],
+      ['planner.forecastMaxAgeHours', { ...P.cfg, planner: { ...(P.cfg.planner || {}), forecastMaxAgeHours: 12 } }]];
+    try {
+      for (const [name, cfg] of cases) {
+        wj(cfgFile, cfg);
+        const tree = () => (exists(P.tools) ? listTree(P.tools).join('|') : '');
+        const before = tree();
+        const r = await r3(W, P, ['install']);
+        ok(r.code === 2 && r.j && String(r.j.error).includes(`${name} was removed on 25 Oct 2026`) && String(r.j.error).includes('delete it'), `${name}: ${say(r)}`);
+        ok(tree() === before, `${name}: install wrote tools anyway`);
+      }
+    } finally { wj(cfgFile, P.cfg); }
+  });
   await test('install: a signer.config.json a routine install wrote (password-file mode) is installed over: tools byte for byte, configs, key files from the environment, never printed', async () => {
     fs.writeFileSync(cfgPath, JSON.stringify({ ...machine, signerMode: 'password-file' }, null, 1) + '\n');
     link(W.nm, path.join(P.tools, 'node_modules')); link(W.nm, path.join(P.signerDir, 'node_modules'));
@@ -451,49 +467,6 @@ async function clearanceSection(W) {
       ok(r.j.empty_plan === false, `empty_plan is ${r.j.empty_plan} for a failed exec --check (exit 4, stop ${clip(r.j.steps[5].stop)})`);
       ok(rj(path.join(P.proj, r.j.record)).empty_plan === false, 'clearance.json says empty_plan');
     } finally { clearRuns(P); setPlan(P, {}); }
-  });
-  // the forecast file from the research repository (forecastImport): the newest made within forecastMaxAgeHours is
-  // copied byte for byte into run/<its run-id>/, nothing else crosses, and a different file already here is kept
-  await test('clearance under forecast-file with forecastImport: the newest young research-forecast.json is copied byte for byte into run/<its run-id>/; stale, malformed, undated and non-ISO ones and folders that are not research run-ids are not; a different file already here is not overwritten; method csv imports nothing', async () => {
-    const R = path.join(P.base, 'research-clone');
-    const put = (rid, body) => { fs.mkdirSync(path.join(R, 'run', rid), { recursive: true }); fs.writeFileSync(path.join(R, 'run', rid, 'research-forecast.json'), typeof body === 'string' ? body : JSON.stringify(body)); };
-    const ago = (h) => new Date(Date.now() - h * 3600000).toISOString();
-    put('2026-01-01T0000Z-research', { generated_at: ago(13), forecasts: [], tag: 'stale' });
-    put('2026-01-02T0000Z-research', { generated_at: ago(2), forecasts: [], tag: 'older' });
-    put('2026-01-03T0000Z-research', { generated_at: ago(1), forecasts: [], tag: 'newest' });
-    put('2026-01-04T0000Z-research', '{ not json');
-    put('2026-01-05T0000Z-research', { generated_at: 'not a date', forecasts: [] });
-    put('2026-01-06T0000Z-research', { generated_at: new Date(Date.now() - 60000).toUTCString(), forecasts: [], tag: 'not ISO' });
-    put('csv', { generated_at: ago(0.1), forecasts: [], tag: 'not a research run-id' });
-    put('2026-01-07T0000Z', { generated_at: ago(0.1), forecasts: [], tag: 'a trading run-id' });
-    const cfg = { ...P.cfg, forecastImport: R, planner: { ...P.cfg.planner, forecastMethod: 'forecast-file', forecastMaxAgeHours: 12 } };
-    const dest = path.join(P.run, '2026-01-03T0000Z-research', 'research-forecast.json');
-    wj(path.join(P.proj, 'routine.config.json'), cfg);
-    try {
-      const { r } = await run({});
-      ok(r.code === 0 && r.j.forecast_import && r.j.forecast_import.imported === 'run/2026-01-03T0000Z-research/research-forecast.json', say(r));
-      ok(fs.readFileSync(dest).equals(fs.readFileSync(path.join(R, 'run', '2026-01-03T0000Z-research', 'research-forecast.json'))), 'not a byte-for-byte copy');
-      for (const d of ['2026-01-01T0000Z-research', '2026-01-02T0000Z-research', '2026-01-04T0000Z-research', '2026-01-05T0000Z-research', '2026-01-06T0000Z-research', '2026-01-07T0000Z']) ok(!exists(path.join(P.run, d)), `${d} was copied too`);
-      ok(!exists(path.join(P.run, 'csv', 'research-forecast.json')), 'a file from a folder that is not a research run-id was copied');
-      ok(rj(path.join(P.proj, r.j.record)).forecast_import.imported === r.j.forecast_import.imported, 'clearance.json has no forecast_import');
-      fs.writeFileSync(dest, '{"generated_at":"2026-01-01T00:00:00Z","mine":true}');
-      clearRuns(P);
-      const { r: again } = await run({});
-      ok(again.j.forecast_import && again.j.forecast_import.imported === null && /not overwritten/.test(again.j.forecast_import.note || ''), say(again));
-      ok(JSON.parse(fs.readFileSync(dest, 'utf8')).mine === true, 'a different file already here was overwritten');
-      wj(path.join(P.proj, 'routine.config.json'), { ...cfg, planner: { ...cfg.planner, forecastMethod: 'csv' } });
-      clearRuns(P);
-      const { r: csv } = await run({});
-      ok(csv.j.forecast_import === null, `method csv imported: ${say(csv)}`);
-    } finally { wj(path.join(P.proj, 'routine.config.json'), P.cfg); rmrf(path.join(P.run, '2026-01-03T0000Z-research')); clearRuns(P); }
-  });
-  await test('config: a forecastImport inside the project -> exit 2, nothing run', async () => {
-    wj(path.join(P.proj, 'routine.config.json'), { ...P.cfg, forecastImport: 'run', planner: { ...P.cfg.planner, forecastMethod: 'forecast-file' } });
-    try {
-      const { r, made } = await run({});
-      ok(r.code === 2 && /forecastImport/.test(r.j.error || ''), say(r));
-      ok(made.length === 0, 'the planner ran');
-    } finally { wj(path.join(P.proj, 'routine.config.json'), P.cfg); clearRuns(P); }
   });
 }
 

@@ -65,7 +65,7 @@ Copy D's numbers into `blended`, attach the market price beside them, change not
    row with `market_price: null`, never dropped, and E says so plainly; F then sends it to `skipped` (F step 1).
 6. **One blend row per forecast row**, same order, same count; then write `blended.json` with
    `method: "identity"`. E never drops a forecast row. A market D wrote no forecast for (a blank CSV cell,
-   which means "unknown", a repo the CSV does not list, or a market the forecast file has no row for) has no row, and E invents none; F reads it from
+   which means "unknown", or a repo the CSV does not list) has no row, and E invents none; F reads it from
    `candidates.json` for the forecast-free arbitrage only (`set-sell`, `merge-arb`, sub-1 pair) and makes
    no directional trade on it.
 

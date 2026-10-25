@@ -27,7 +27,7 @@ Never fill a missing row from `allocation.json` or a live balance. Also read-onl
 *Nothing settled*). H signs nothing, spends nothing and never
 reads or prints a key, so unlike G it is idempotent — re-run it whenever another market settles.
 In autonomous mode (`../SKILL.md`) every daily run runs H on **this arm's** run-ids that hold fills
-(I-setup's Half B filter: `method: "csv-face-value"` or a method D marked as this arm's, `D-forecast.md` *Output schema*; `objective: "max-ev"`), but only on a run-id with
+(I-setup's Half B filter: this arm's `method`, `"csv-face-value"` or an older prefix `D-forecast.md` *Output schema* names, and `objective: "max-ev"`), but only on a run-id with
 no `review.json` yet, or with a market newly settled since its last `review.json`, and not listed in
 `run/.lock.deep-r3-trade/live-runs.txt`, and, for a prior run-id, final (above); a run whose Half A stopped at C or D still
 runs H this way (`I-setup.md` I.2 §2). The orchestrator — not H — builds

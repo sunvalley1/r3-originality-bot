@@ -11,8 +11,8 @@
 //       R3_KEYSTORE_JSON and R3_KEYSTORE_PASSWORD when both are set (written 0600 outside the project, never printed)
 //   node ... routine.cjs trade [--push]
 //       one scheduled run: the lock, the planner and signer pins of run/setup.deep-r3-trade.json (the paths must be this
-//       install's), the forecast file imported from the research repository (forecastImport), `planner wake` once,
-//       the final status; --push commits and pushes the run records while the run lasts and at its end
+//       install's), `planner wake` once, the final status; --push commits and pushes the run records while the run
+//       lasts and at its end
 //   node ... routine.cjs clearance [--push]
 //       the no-send check of an install: c, d, e, f, g --indep and exec --check on a new run-id; signs nothing. It
 //       passes only when exec --check checked a plan (an empty plan checks nothing), and it writes
@@ -21,11 +21,6 @@
 //       the signer self-test's policy cases (steps/I-setup.md I.1 section 7, (1) to (16)), as the supervised self-test
 //       saved them (case-*.json and results.json), replayed through this install's signer `check`: needs no key or
 //       RPC and signs nothing; results in run/setup-<UTC slug>/selftest/results.json
-//   node ... routine.cjs research-begin [--parts N]
-//       a research run-id, the AI research that writes D's forecast file (method forecast-file): planner c, planner
-//       blind, then ai-forecast/prep.cjs's worker folders
-//   node ... routine.cjs research-end <run-id> --model <name> --how <text> [--push]
-//       ai-forecast/merge.cjs into run/<run-id>/research-forecast.json, then commit and push it
 //   node ... routine.cjs status
 //       the newest scheduled run's final status
 //   node ... routine.cjs planner <subcommand> <run-id> [flags]
@@ -37,7 +32,7 @@
 //
 // Every subcommand prints one JSON line. Exit codes, as the old wrapper's: 0 done; 1 internal error; 2 usage, config,
 // or the lock is held; 3 the run aborted; 4 refused at the gates (a pin, a missing tool or key) or, from `trade`, the
-// planner's own safety stop; 5 nothing to trade on (no-csv, csv-store-mismatch, no-forecast) or, from `trade`, the
+// planner's own safety stop; 5 nothing to trade on (no-csv, csv-store-mismatch) or, from `trade`, the
 // planner's transport failure; 6 a time or turn budget ran out. `trade` passes the planner's exit code through
 // otherwise (`exitFor`). It signs nothing itself: every send is the planner's, through the signer.
 'use strict';
@@ -75,13 +70,18 @@ const readJson = (p) => JSON.parse(fs.readFileSync(p, 'utf8').replace(/^﻿/, ''
 function readSetup() { try { return readJson(SETUP); } catch (e) { return null; } }
 
 // ---- routine.config.json: where the tools go and what they talk to. No secret is ever in it.
-const CONFIG_KEYS = ['toolsDir', 'signerDir', 'keysDir', 'stateDir', 'rpcUrl', 'dataFunctionUrl', 'signerAddress', 'owner', 'allowlistFile', 'allowlistSha256', 'planner', 'git', 'forecastImport'];
-const PLANNER_KEYS = ['rpcGapMs', 'parallel', 'forecastMethod', 'forecastMaxAgeHours'];
+const CONFIG_KEYS = ['toolsDir', 'signerDir', 'keysDir', 'stateDir', 'rpcUrl', 'dataFunctionUrl', 'signerAddress', 'owner', 'allowlistFile', 'allowlistSha256', 'planner', 'git'];
+const PLANNER_KEYS = ['rpcGapMs', 'parallel'];
+// keys a config written before 25 Oct 2026 may still hold: refused, never ignored (a forecastMethod of forecast-file
+// silently dropped would trade the stored CSV instead), but named, so updating an install is one deletion
+const REMOVED = 'was removed on 25 Oct 2026 with the forecast-file method (D now reads the stored CSV only): delete it';
 function loadConfig() {
   let raw;
   try { raw = readJson(CONFIG); } catch (e) { throw new Exit(2, `routine.config.json is missing or not JSON in ${ROOT}; copy routine.config.example.json and fill it in`); }
+  if ('forecastImport' in raw) throw new Exit(2, `routine.config.json: forecastImport ${REMOVED}`);
   for (const k of Object.keys(raw)) if (!CONFIG_KEYS.includes(k) && !k.startsWith('_')) throw new Exit(2, `routine.config.json: unknown key ${clip(k, 40)}`);
   const planner = raw.planner || {};
+  for (const k of ['forecastMethod', 'forecastMaxAgeHours']) if (k in planner) throw new Exit(2, `routine.config.json: planner.${k} ${REMOVED}`);
   for (const k of Object.keys(planner)) if (!PLANNER_KEYS.includes(k) && !k.startsWith('_')) throw new Exit(2, `routine.config.json: unknown planner key ${clip(k, 40)}`);
   const c = {
     toolsDir: path.resolve(home(raw.toolsDir || '~/r3-tools')),
@@ -93,9 +93,7 @@ function loadConfig() {
     signerAddress: String(raw.signerAddress || ''), owner: String(raw.owner || ''),
     allowlistFile: raw.allowlistFile || 'setup/r3-allowlist.json', allowlistSha256: String(raw.allowlistSha256 || '').toLowerCase(),
     planner, git: { name: 'deep-r3-trade routine', email: 'noreply@localhost', branch: '', ...(raw.git || {}) },
-    forecastImport: raw.forecastImport ? path.resolve(ROOT, home(String(raw.forecastImport))) : null,
   };
-  if (c.forecastImport && isInside(ROOT, c.forecastImport)) throw new Exit(2, 'routine.config.json: forecastImport must be the research repository\'s clone, outside the project folder');
   for (const k of ['signerAddress', 'owner']) if (!/^0x[0-9a-fA-F]{40}$/.test(c[k])) throw new Exit(2, `routine.config.json: ${k} must be a 0x address`);
   if (c.signerAddress.toLowerCase() === c.owner.toLowerCase()) throw new Exit(2, 'routine.config.json: owner (your own address) must differ from signerAddress (the bot wallet)');
   if (!/^[0-9a-f]{64}$/.test(c.allowlistSha256)) throw new Exit(2, 'routine.config.json: allowlistSha256 must be the allowlist file\'s sha256');
@@ -181,39 +179,6 @@ function install(c, opts) {
     planner_sha256: sha256File(P.planner), signer_sha256: sha256File(P.signer), allowlist_sha256: c.allowlistSha256, ethers, keys,
     pins: { planner: pin(a.planner_path, a.planner_sha256, P.planner), signer: pin(a.signer_path, a.signer_sha256, P.signer) },
   };
-}
-
-// ---- the forecast file from the research repository (routine.config.json forecastImport). The research routine works
-// in a repository of its own and never writes to this one: anything that reads the open web stays away from the
-// repository whose code runs next to the key. The trading run copies the newest forecast file made within
-// forecastMaxAgeHours from that clone's run/*/research-forecast.json into ./run/<the same run-id>/, as data that D checks
-// like any forecast file (steps/D-methods/forecast-file.md). Only that one file crosses: nothing else is read from there.
-const FORECAST_FILE = 'research-forecast.json';
-function importForecast(c) {
-  if (!c.forecastImport || !['forecast-file', 'ai'].includes(c.planner.forecastMethod)) return null;
-  const srcRun = path.join(c.forecastImport, 'run');
-  const maxAge = Number(c.planner.forecastMaxAgeHours) || 12;
-  let best = null;
-  let dirs = []; try { dirs = fs.readdirSync(srcRun, { withFileTypes: true }); } catch (e) { return { imported: null, note: `no run/ folder in ${c.forecastImport}` }; }
-  for (const d of dirs) {
-    if (!d.isDirectory() || !/^\d{4}-\d\d-\d\dT\d{4}Z-research(-w2)?$/.test(d.name)) continue; // research run-ids only; a link is never a directory entry here
-    const f = path.join(srcRun, d.name, FORECAST_FILE);
-    let st; try { st = fs.lstatSync(f); } catch (e) { continue; }
-    if (!st.isFile() || st.size > 4 * 1024 * 1024) continue;
-    let t = NaN; try { const g = readJson(f).generated_at; t = typeof g === 'string' && /^\d{4}-\d\d-\d\dT\d\d:\d\d(:\d\d(\.\d{1,3})?)?Z$/.test(g) ? Date.parse(g) : NaN; } catch (e) { continue; }
-    const age = (Date.now() - t) / 3600000;
-    if (!Number.isFinite(t) || age < -0.25 || age > maxAge) continue;
-    if (!best || t > best.t) best = { rid: d.name, f, t, age };
-  }
-  if (!best) return { imported: null, note: `no ${FORECAST_FILE} in ${srcRun} made within ${maxAge} h` };
-  const rel = `run/${best.rid}/${FORECAST_FILE}`; const dest = path.join(RUN, best.rid, FORECAST_FILE);
-  const bytes = fs.readFileSync(best.f);
-  if (fs.existsSync(dest)) {
-    if (fs.readFileSync(dest).equals(bytes)) return { imported: rel, already: true, age_hours: Math.round(best.age * 10) / 10 };
-    return { imported: null, note: `${rel} already exists here with other content; not overwritten` };
-  }
-  fs.mkdirSync(path.dirname(dest), { recursive: true }); fs.writeFileSync(dest, bytes);
-  return { imported: rel, from: best.f, age_hours: Math.round(best.age * 10) / 10, sha256: crypto.createHash('sha256').update(bytes).digest('hex') };
 }
 
 // ---- run-ids, the lock, live supervised sessions
@@ -311,7 +276,7 @@ function finalize(rid, rc, why) {
 function exitFor(rc, ws) {
   let RC = rc;
   if (!ws || ws.status === 'aborted') { if (RC === 0) RC = 3; }
-  if (ws && ['no-csv', 'csv-store-mismatch', 'no-forecast'].includes(ws.status) && (RC === 0 || RC === 3)) RC = 5;
+  if (ws && ['no-csv', 'csv-store-mismatch'].includes(ws.status) && (RC === 0 || RC === 3)) RC = 5;
   if (ws && /turn\/time budget exhausted|RESIZE SCHEDULE/.test(String(ws.notes || '')) && RC === 0) RC = 6;
   return RC;
 }
@@ -380,9 +345,6 @@ async function tradeLocked(c, opts, setup, rid) {
   }
   const live = liveSessions();
   fs.writeFileSync(path.join(LOCK, 'live-runs.txt'), live.join('\n'));
-  let imported = null;
-  try { imported = importForecast(c); } catch (e) { imported = { imported: null, note: clip(e.message, 200) }; }
-  if (imported) log(`run ${rid}: forecast import: ${imported.imported ? `${imported.imported}${imported.already ? ' (already here)' : ''}, ${imported.age_hours} h old` : imported.note}`);
 
   log(`run ${rid}: planner wake started`);
   const rc = await wake(P.planner, rid, c, opts.push);
@@ -392,7 +354,7 @@ async function tradeLocked(c, opts, setup, rid) {
   release(ownerText);
   log(`run ${rid} finished, exit ${RC}`);
   const pushed = opts.push ? pushRecords(c, `records: run ${rid} finished (${ws.status}), exit ${RC}`) : null;
-  return { exit: RC, out: { ok: RC === 0, subcommand: 'trade', run_id: rid, exit: RC, planner_exit: rc, status: ws.status, stopped_at_step: ws.stopped_at_step || null, report: `run/${rid}/report.md`, live_supervised_runs: live, forecast_import: imported, pushed } };
+  return { exit: RC, out: { ok: RC === 0, subcommand: 'trade', run_id: rid, exit: RC, planner_exit: rc, status: ws.status, stopped_at_step: ws.stopped_at_step || null, report: `run/${rid}/report.md`, live_supervised_runs: live, pushed } };
 }
 
 // ---- clearance: the no-send check of an install (I-setup.md I.2 section 7, The planner)
@@ -400,8 +362,6 @@ function clearance(c, opts) {
   const P = paths(c);
   if (!fs.existsSync(P.planner)) throw new Exit(4, 'the planner is not installed: run routine.cjs install first');
   const rid = newRunId('-clearance');
-  let imported = null;
-  try { imported = importForecast(c); } catch (e) { imported = { imported: null, note: clip(e.message, 200) }; }
   const steps = [];
   for (const args of [['c'], ['d'], ['e'], ['f'], ['g', '--indep'], ['exec', '--check']]) {
     const t0 = Date.now(); const r = runPlanner(P.planner, [args[0], rid, ...args.slice(1)]);
@@ -415,11 +375,11 @@ function clearance(c, opts) {
   const modules = {};
   for (const f of fs.readdirSync(path.join(P.plannerDir, 'planner')).filter((n) => n.endsWith('.cjs')).sort()) modules[`planner/${f}`] = sha256File(path.join(P.plannerDir, 'planner', f));
   const head = String(git(['rev-parse', 'HEAD']).stdout || '').trim() || null;
-  const record = { run_id: rid, at: iso(), passed, empty_plan: empty, forecast_import: imported, steps, git_head: head,
+  const record = { run_id: rid, at: iso(), passed, empty_plan: empty, steps, git_head: head,
     installed: { planner: P.planner, planner_sha256: sha256File(P.planner), modules_sha256: modules, helper_sha256: sha256File(P.helper), signer: P.signer, signer_sha256: sha256File(P.signer), allowlist_sha256: sha256File(P.allowlist) } };
   fs.mkdirSync(path.join(RUN, rid), { recursive: true }); fs.writeFileSync(path.join(RUN, rid, 'clearance.json'), JSON.stringify(record, null, 1) + '\n');
-  const pushed = opts.push ? pushRecords(c, `records: clearance ${rid} ${passed ? 'passed' : 'failed'}`, [rid, ...(imported && imported.imported ? [path.posix.dirname(imported.imported).slice(4)] : [])]) : null;
-  return { exit: passed ? 0 : 3, out: { ok: passed, subcommand: 'clearance', run_id: rid, passed, empty_plan: record.empty_plan, forecast_import: imported, steps, record: `run/${rid}/clearance.json`, pushed } };
+  const pushed = opts.push ? pushRecords(c, `records: clearance ${rid} ${passed ? 'passed' : 'failed'}`, rid) : null;
+  return { exit: passed ? 0 : 3, out: { ok: passed, subcommand: 'clearance', run_id: rid, passed, empty_plan: record.empty_plan, steps, record: `run/${rid}/clearance.json`, pushed } };
 }
 
 // ---- selftest: the supervised self-test's `check` cases again, on this install's signer (I-setup.md I.1 section 7).
@@ -465,36 +425,6 @@ function selftest(c, opts) {
     passed: cases.length - fails.length, failed: fails, results: `run/${rid}/selftest/results.json`, pushed } };
 }
 
-// ---- the AI research: a research run-id whose forecast file D's forecast-file method reads
-function researchBegin(c, opts) {
-  const P = paths(c);
-  if (!fs.existsSync(P.planner)) throw new Exit(4, 'the planner is not installed: run routine.cjs install first');
-  const parts = opts.parts === undefined ? 7 : Number(opts.parts);
-  if (!Number.isInteger(parts) || parts < 1 || parts > 16) throw new Exit(2, '--parts must be an integer 1..16');
-  const rid = newRunId('-research');
-  const work = path.join(os.homedir(), 'r3-research', rid);
-  const cr = runPlanner(P.planner, ['c', rid]);
-  if (cr.exit !== 0) throw new Exit(3, `planner c ${rid} failed (exit ${cr.exit}): ${clip(JSON.stringify(cr.j.stop || cr.j.error || cr.stderr), 400)}`);
-  const br = runPlanner(P.planner, ['blind', rid]);
-  if (br.exit !== 0) throw new Exit(3, `planner blind ${rid} failed (exit ${br.exit}): ${clip(JSON.stringify(br.j.stop || br.j.error || br.stderr), 400)}`);
-  const pr = cp.spawnSync(process.execPath, [path.join(SCRIPTS, 'ai-forecast', 'prep.cjs'), ROOT, rid, path.join(SCRIPTS, 'ai-forecast'), work, String(parts)], { cwd: ROOT, encoding: 'utf8', windowsHide: true });
-  if (pr.status !== 0) throw new Exit(3, `ai-forecast/prep.cjs failed: ${clip(pr.stderr, 400)}`);
-  const dirs = fs.readdirSync(work).filter((d) => /^part-\d+$/.test(d)).sort((x, y) => Number(x.slice(5)) - Number(y.slice(5)));
-  return { exit: 0, out: { ok: true, subcommand: 'research-begin', run_id: rid, work, questions: br.j.questions, answers_posted: br.j.answers_posted,
-    parts: dirs.map((d) => ({ part: d, folder: path.join(work, d), brief: path.join(work, d, 'TASK.md'), writes: path.join(work, d, `${d}.json`) })),
-    next: 'one fresh worker per part: read TASK.md in its folder and follow it; then routine.cjs research-end' } };
-}
-function researchEnd(c, rid, opts) {
-  if (!rid || !/^[A-Za-z0-9._-]+-research(-w2)?$/.test(rid)) throw new Exit(2, 'research-end needs the research run-id research-begin printed');
-  if (!opts.model || !opts.how) throw new Exit(2, 'research-end needs --model <name> and --how <text>');
-  const work = path.join(os.homedir(), 'r3-research', rid);
-  const mr = cp.spawnSync(process.execPath, [path.join(SCRIPTS, 'ai-forecast', 'merge.cjs'), ROOT, rid, work, opts.model, opts.how], { cwd: ROOT, encoding: 'utf8', windowsHide: true });
-  if (mr.status !== 0) throw new Exit(3, `ai-forecast/merge.cjs refused the parts: ${clip(mr.stderr, 600)}`);
-  const rf = readJson(path.join(RUN, rid, 'research-forecast.json'));
-  const pushed = opts.push ? pushRecords(c, `records: research ${rid}, ${rf.forecasts.length} forecasts`, rid) : null;
-  return { exit: 0, out: { ok: true, subcommand: 'research-end', run_id: rid, forecasts: rf.forecasts.length, generated_at: rf.generated_at, file: `run/${rid}/research-forecast.json`, pushed } };
-}
-
 function status() {
   const ids = fs.existsSync(RUN) ? fs.readdirSync(RUN).filter((d) => /^\d{4}-\d\d-\d\dT\d{4}Z(-w2)?$/.test(d)).sort() : [];
   for (const rid of ids.reverse()) { const w = wakeStatus(rid); if (w) return { exit: 0, out: { ok: true, subcommand: 'status', run_id: rid, status: w.status, stopped_at_step: w.stopped_at_step || null, finished_at: w.finished_at || null, report: `run/${rid}/report.md` } }; }
@@ -504,7 +434,7 @@ function status() {
 // ---- the command line
 function parse(argv) {
   const [sub, ...rest] = argv; const opts = {}; const pos = [];
-  const VALUE = { '--ethers-from': 'ethersFrom', '--parts': 'parts', '--model': 'model', '--how': 'how', '--cases': 'cases' };
+  const VALUE = { '--ethers-from': 'ethersFrom', '--cases': 'cases' };
   for (let i = 0; i < rest.length; i++) {
     const t = rest[i];
     if (t === '--push') opts.push = true;
@@ -534,16 +464,14 @@ function plannerPassthrough(args) {
 async function main() {
   if (!fs.existsSync(path.join(ROOT, '.claude', 'skills', 'deep-r3-trade'))) throw new Exit(2, 'run routine.cjs from the project root (the folder holding .claude/skills/deep-r3-trade)');
   if (process.argv[2] === 'planner') return { exit: plannerPassthrough(process.argv.slice(3)), out: null };
-  const { sub, opts, pos } = parse(process.argv.slice(2));
+  const { sub, opts } = parse(process.argv.slice(2));
   if (sub === 'status') return status();
   const c = loadConfig();
   if (sub === 'install') return { exit: 0, out: install(c, opts) };
   if (sub === 'trade') return trade(c, opts);
   if (sub === 'clearance') return clearance(c, opts);
   if (sub === 'selftest') return selftest(c, opts);
-  if (sub === 'research-begin') return researchBegin(c, opts);
-  if (sub === 'research-end') return researchEnd(c, pos[0], opts);
-  throw new Exit(2, 'usage: node routine.cjs <install|trade|clearance|selftest|research-begin|research-end|status|planner> [flags] (see the header)');
+  throw new Exit(2, 'usage: node routine.cjs <install|trade|clearance|selftest|status|planner> [flags] (see the header)');
 }
 main().then(({ exit, out }) => { if (out) process.stdout.write(JSON.stringify(out) + '\n'); process.exitCode = exit; }, (e) => {
   const code = e instanceof Exit ? e.code : 1;

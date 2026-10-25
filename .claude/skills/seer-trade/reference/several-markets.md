@@ -44,7 +44,7 @@ Then the orchestrator, single-threaded:
    question on each, never the title.
 3. **Re-run F once over the merged book.** Per-market Kelly caps do not compose, and F's correlated
    worst case has to see the whole book to apply the common failure factor **once** rather than once
-   per market. Markets that hinge on the same poll reaching quorum are one bet, not four — size them
+   per market. Markets that hinge on the same poll reaching quorum are one exposure, not four — size them
    as one position.
 4. **Work out which outcome the common failure actually resolves to, and never assume it is Invalid.**
    Plenty of questions define it away: criteria that make a failed quorum resolve *No* turn a "No"

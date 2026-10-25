@@ -1,9 +1,7 @@
 // planner/d.cjs - `planner d <run-id>` and `planner d <run-id> --supply <csv> [--continue] [--notes <text>]`:
-// steps/D-forecast.md, writing ./run/<run-id>/base-forecast.json by the method planner.config.json names
-// (forecastMethod): 'csv', the default, the stored CSV below (steps/D-methods/csv.md); 'forecast-file' ('ai' is its first
-// name), a forecast file any source wrote in the documented shape (forecastFile, after the CSV code).
+// steps/D-methods/csv.md (D's contract: steps/D-forecast.md), writing ./run/<run-id>/base-forecast.json.
 //
-// `d <run-id>`, method csv: the stored CSV (steps/D-methods/csv.md step 2, case 2), proceeding silently. D's structural checks only: the pointer as
+// `d <run-id>`: the stored CSV (csv.md step 2, case 2), proceeding silently. D's structural checks only: the pointer as
 // JSON with its three fields, its version file under ./run/csv/, the parse, the match. Nothing is hashed (csv.md,
 // *Integrity on load*: a scheduled run hashes nothing; a supervised session hashes the version file itself, with a
 // command the human sees). No CSV ever provided is the D stop `no-csv`; a pointer that does not resolve is the D
@@ -12,9 +10,6 @@
 // to the project root. It prints step 5's report and stores nothing until `--continue` (the human's "continue");
 // a matched count of 0 is refused even with `--continue`. With `--continue` it writes the version file
 // (write-once), rewrites ./run/csv/current.json and writes base-forecast.json.
-// `d <run-id>`, method forecast-file: this run-id's research-forecast.json, or the newest one under ./run/ made within
-// forecastMaxAgeHours, copied in byte for byte; checked, then written as base-forecast.json. `--supply` always takes the
-// CSV path, so a CSV can be stored under either method.
 // D reads exactly five fields per candidate (market, address, kind, outcomes, parent), never a price, and touches
 // no chain: this module runs no helper and no signer.
 'use strict';
@@ -26,7 +21,7 @@ const GH = 'https://github.com/';
 const CURRENT = 'run/csv/current.json';
 const VERSION_RE = /^originality-v(\d+)-[A-Za-z0-9._-]+\.csv$/;
 
-// ---- step 3, verbatim from the pseudocode of the csv method (steps/D-methods/csv.md). Returns the rows that survive, plus the blank-cell rows it skipped
+// ---- step 3, verbatim from the pseudocode in csv.md. Returns the rows that survive, plus the blank-cell rows it skipped
 // (that pseudocode discards them; step 5 needs them to split "markets with no forecast" into blank-cell and absent).
 function parseOriginalityCSV(csv) {
   const text = csv.trim();
@@ -130,9 +125,6 @@ async function run(ctx) {
   if (new Set(scalar.map((c) => c.market)).size !== scalar.length) refuse.push('duplicate market string among candidates');
   if (scalar.length === 0) refuse.push('no scalar rows');
   if (refuse.length) throw dstop('candidates-refused', 'aborted', `D step 1: candidates.json failed D's assertions, nothing written: ${refuse.slice(0, 5).join('; ')}`, { problems: refuse.length });
-
-  // ---------------------------------------------------------------- method forecast-file ('ai'): a forecast file
-  if (lib.FORECAST_FILE_METHODS.includes(ctx.cfg.forecastMethod) && supply === undefined) return forecastFile(ctx, scalar, skippedNonScalar);
 
   // ---------------------------------------------------------------- step 2: get the CSV (never re-ask)
   const csvNames = ctx.listRunDir('csv');
@@ -295,105 +287,6 @@ async function run(ctx) {
     ...reportFields(M),
     skipped_not_scalar: skippedNonScalar,
     artifacts,
-  };
-}
-
-// ---- D's method forecast-file (forecastMethod 'forecast-file', or 'ai', its first name; steps/D-forecast.md). The
-// forecast is a forecast file, research-forecast.json, that any source wrote in the documented shape: the price-blind AI
-// research (scripts/ai-forecast/), another model, a script or a pool of forecasters. D takes this run-id's own copy when
-// it has one (a supervised session that made one for this run), else the newest research-forecast.json under ./run/ made
-// within forecastMaxAgeHours (a research routine's run-id), copied in byte for byte so the run-id keeps what it traded
-// on. D checks it (price_seen false, a method text naming how it was made, each p three numbers in [0, 1] summing to 1
-// with Invalid above 0, one row per address, each row's market naming the repo C names: the research names it by the
-// oracle question's text) and writes base-forecast.json with C's market strings and the file's method, marked as this
-// arm's (lib.markForecastFileMethod) so that F, Half B, H and the repair know the run-id. A candidate without a row gets
-// no forecast, as a blank CSV cell does; rows for other addresses are ignored. No forecast file is the D stop
-// no-forecast; a malformed one the D stop forecast-refused. Either way no base-forecast.json is written, the run makes
-// no new entry and a wake still runs Half B and H.
-const RESEARCH_FILE = 'research-forecast.json';
-// generated_at must be a plain ISO 8601 UTC timestamp: free text that Date.parse also accepts would carry the file's
-// words into the logs and the report
-const ISO_UTC = /^\d{4}-\d\d-\d\dT\d\d:\d\d(:\d\d(\.\d{1,3})?)?Z$/;
-const isoTime = (v) => (typeof v === 'string' && ISO_UTC.test(v) ? Date.parse(v) : NaN);
-function forecastFile(ctx, scalar, skippedNonScalar) {
-  const D = ctx.detail;
-  const maxAge = ctx.cfg.forecastMaxAgeHours;
-  let from; let bytes; let ageHours = null;
-  if (ctx.existsRun(RESEARCH_FILE)) {
-    from = ctx.runId; bytes = ctx.readRun(RESEARCH_FILE);
-    ctx.log(`method forecast-file: ${ctx.rel(RESEARCH_FILE)} is this run-id's own research forecast; used as is`);
-  } else {
-    const now = Date.now(); let best = null;
-    for (const d of ctx.listRunIds()) {
-      if (d === ctx.runId || !ctx.existsRel(`run/${d}/${RESEARCH_FILE}`)) continue;
-      let t = NaN; let b = null;
-      try { b = ctx.readRel(`run/${d}/${RESEARCH_FILE}`); t = isoTime(JSON.parse(b.toString('utf8')).generated_at); } catch (e) {
-        ctx.log(`  method forecast-file: run/${d}/${RESEARCH_FILE} is unreadable, skipped: ${clip(e.message, 120)}`); continue;
-      }
-      if (!Number.isFinite(t)) { ctx.log(`  method forecast-file: run/${d}/${RESEARCH_FILE} has no ISO 8601 UTC generated_at, skipped`); continue; }
-      const age = (now - t) / 3600000;
-      if (age < -0.25) { ctx.log(`  method forecast-file: run/${d}/${RESEARCH_FILE} is dated in the future, skipped`); continue; }
-      if (age > maxAge) continue;
-      if (!best || t > best.t) best = { d, t, b, age };
-    }
-    if (!best) {
-      throw dstop('no-forecast', 'no-forecast', `D (method forecast-file): no forecast file: this run-id has no ${RESEARCH_FILE} and no run-id under ./run/ holds one made in the last ${maxAge} hours (forecastMaxAgeHours); no base-forecast.json written, so this run makes no new entry (a wake still runs Half B and H)`);
-    }
-    from = best.d; bytes = best.b; ageHours = best.age;
-    ctx.writeRun(RESEARCH_FILE, bytes);
-    ctx.log(`method forecast-file: copied run/${from}/${RESEARCH_FILE} (made ${best.age.toFixed(1)} h ago) into ${ctx.rel(RESEARCH_FILE)}, byte for byte`);
-  }
-
-  const fail = (notes, fields = {}) => dstop('forecast-refused', 'aborted', `D (method forecast-file): run/${from}/${RESEARCH_FILE} ${notes}; no base-forecast.json written, so this run makes no new entry (a wake still runs Half B and H)`, fields);
-  let rf;
-  try { rf = JSON.parse(bytes.toString('utf8')); } catch (e) { throw fail('does not read as JSON'); } // the parser's message quotes the file
-  if (!rf || typeof rf !== 'object' || Array.isArray(rf)) throw fail('is not a JSON object');
-  const bad = [];
-  if (rf.price_seen !== false) bad.push(`price_seen is a ${rf.price_seen === null ? 'null' : typeof rf.price_seen}, not false`);
-  if (typeof rf.method !== 'string' || !rf.method.trim()) bad.push('method is not a text saying how the forecast was made');
-  if (!Number.isFinite(isoTime(rf.generated_at))) bad.push('generated_at is not an ISO 8601 UTC timestamp');
-  if (!Array.isArray(rf.forecasts) || !rf.forecasts.length) bad.push('forecasts[] is missing or empty');
-  const byAddr = new Map();
-  for (const [i, f] of (Array.isArray(rf.forecasts) ? rf.forecasts : []).entries()) {
-    const a = String(f && f.address);
-    if (!/^0x[0-9a-f]{40}$/.test(a)) { bad.push(`row ${i}: address is not lowercase 0x + 40 hex`); continue; }
-    if (byAddr.has(a)) bad.push(`duplicate address ${a}`);
-    byAddr.set(a, f);
-    const p = f.p;
-    if (!Array.isArray(p) || p.length !== 3 || !p.every((x) => typeof x === 'number' && Number.isFinite(x) && x >= 0 && x <= 1)) { bad.push(`${a}: p is not three numbers in [0, 1]`); continue; }
-    if (Math.abs(p[0] + p[1] + p[2] - 1) > 1e-9) bad.push(`${a}: p sums to ${p[0] + p[1] + p[2]}`);
-    if (!(p[2] > 0) || f.invalid_p !== p[2]) bad.push(`${a}: invalid_p ${typeof f.invalid_p === 'number' ? f.invalid_p : `(a ${typeof f.invalid_p})`} is not p[2] = ${p[2]} above 0`);
-    if (typeof f.market !== 'string' || !f.market) bad.push(`${a}: market is empty`);
-  }
-  if (bad.length) throw fail(`failed D's checks: ${bad.slice(0, 5).join('; ')}${bad.length > 5 ? ` (+${bad.length - 5} more)` : ''}`, { problems: bad.length });
-
-  const forecasts = []; const noForecast = []; const misnamed = [];
-  for (const c of scalar) {
-    const f = byAddr.get(c.address);
-    if (!f) { noForecast.push(c.market); continue; }
-    // a research row names its market by the oracle question's text (the worker brief), which must name C's repo
-    const fm = String(f.market).toLowerCase(); const cm = c.market.toLowerCase();
-    if (fm !== cm && !fm.includes(cm)) { misnamed.push(`${c.address}: the file's market does not name ${c.market}`); continue; }
-    forecasts.push({ market: c.market, address: c.address, p: f.p.slice(), invalid_p: f.invalid_p, sums_to_one: true, reasoning: f.reasoning, sources: f.sources, would_change_my_mind: f.would_change_my_mind });
-  }
-  if (misnamed.length) throw fail(`names another repo than C for ${misnamed.length} address(es): ${misnamed.slice(0, 3).join('; ')}`, { problems: misnamed.length });
-  if (!forecasts.length) throw fail('matches none of the candidates');
-  const known = new Set(scalar.map((c) => c.address));
-  const ignored = [...byAddr.keys()].filter((a) => !known.has(a)).length;
-  D.no_forecast = noForecast;
-
-  ctx.writeRunJson('base-forecast.json', { generated_at: lib.nowIsoSec(), method: lib.markForecastFileMethod(rf.method), price_seen: false, forecasts });
-  ctx.log(`method forecast-file: wrote ${ctx.rel('base-forecast.json')}: ${forecasts.length} forecasts from run/${from}/${RESEARCH_FILE} (made ${rf.generated_at}), price_seen false; ${noForecast.length} candidate(s) without a row get no forecast; ${ignored} row(s) for other addresses ignored`);
-  return {
-    source: 'forecast-file',
-    forecasts: forecasts.length,
-    forecast_file: {
-      file: ctx.rel(RESEARCH_FILE), from_run_id: from, generated_at: rf.generated_at,
-      age_hours: ageHours === null ? null : Math.round(ageHours * 10) / 10,
-      method: clip(rf.method, 300), method_sha256: lib.sha256(Buffer.from(String(rf.method), 'utf8')), no_forecast: noForecast.length, ignored_rows: ignored,
-    },
-    skipped_not_scalar: skippedNonScalar,
-    artifacts: [ctx.rel('base-forecast.json'), ...(from !== ctx.runId ? [ctx.rel(RESEARCH_FILE)] : [])],
   };
 }
 

@@ -89,7 +89,7 @@ the size you would stake before writing one.
 Per outcome whose blended `p` differs from its price: `direct` (buy the leg from its pool), `split`
 (mint a set, sell the legs you do not want, keep the target **and** Invalid), `fade` (mint a set, sell
 **only** the overpriced leg, keep the rest), and the **carry** (`pair-carry`) — buy every pooled leg at equal counts with
-no surplus Invalid, paying 1 if the market resolves valid and 0 if Invalid, so it is a short-Invalid bet and
+no surplus Invalid, paying 1 if the market resolves valid and 0 if Invalid, so it is a short-Invalid position and
 not an arbitrage. Prefix any of them `parent-mint+` when the market is a child whose collateral the holder
 does not hold already. On the 2026-10-01 v3 book 36 of the 98 R3 children sit below `1 − fee`, so the carry
 is a line this book offers — and it is sized by a blended `P(valid)`, not by the size of the discount.
@@ -148,7 +148,7 @@ and 2.7% — about 8× too big. `p_win` is a reporting field in the artifact and
 Kelly **at spot overstates the stake on these pools**: `c(s)` rises with size, so `f*` falls as you push and
 the fixed point sits well below what spot implies. The quarter is the house default because Kelly assumes
 your probability is correct and yours is not. Two approximations both err small and are better noted than
-corrected: a fractional payoff carries less variance than the all-or-nothing bet Kelly models, and on a
+corrected: a fractional payoff carries less variance than the all-or-nothing payoff Kelly models, and on a
 child `s` is in parent outcome tokens while `B` is root collateral.
 
 ### 7. Set the hurdle the marginal dollar has to clear
@@ -193,7 +193,7 @@ steered between repos (§4 item 6); a repo token is worth `1/N` sUSDS if its rep
 
 ### 9. Apply the correlated failure once, across the whole book
 
-Markets hinging on one common factor are **one bet, not many**, and per-market Kelly caps do not compose.
+Markets hinging on one common factor are **one exposure, not many**, and per-market Kelly caps do not compose.
 
 1. Name each common factor and list the markets it touches: one oracle, one publication, one jury,
    one funding round, one parent.
@@ -207,7 +207,7 @@ Markets hinging on one common factor are **one bet, not many**, and per-market K
    which hits every repo token of that bundle together.
 3. **Never credit a hedge that depends on winning a bond war.**
 4. Apply `P(factor)` **once**, value the whole book in the world where it hits, and cap the group's
-   total stake at quarter-Kelly of that composite bet. Report it as `totals.correlated_worst_case`.
+   total stake at quarter-Kelly of that composite exposure. Report it as `totals.correlated_worst_case`.
 
 ### 10. Decide, and write the artifact
 
@@ -252,7 +252,7 @@ price of "evaluated, but the child resolves INVALID", not free money.
 - **Never treat the bankroll as a target.** Report the EV peak, allocate below it, return the rest.
 - **Never stack alternative expressions of one view.** One view, one line, the cleanest.
 - **Never compose per-market Kelly caps across correlated markets**, and never assume the common
-  failure resolves Invalid. One factor, one bet, one cap, on the side the criteria actually name.
+  failure resolves Invalid. One factor, one exposure, one cap, on the side the criteria actually name.
 - **Never pool one global budget across parent outcomes**, and never compare a child figure to an
   sUSDS one without stating the conversion and calling it a scenario.
 - **Never emit a stake in a market C marked untradeable, whose payout is reported, or whose question
@@ -283,7 +283,7 @@ Field conventions, so G executes without guessing:
   written into the artifact** — `set-sell` and `merge-arb` are the values. A **carry is one row**, not
   two: `route: "pair-carry"`, `side: "pair"`, `stake` the total collateral the pair costs in
   `stake_unit`, sized from `quoteExactOutputSingle` at one common target count per leg. Splitting it
-  across two `direct` rows lets half of it fill and leaves a naked directional bet; G buys both legs as
+  across two `direct` rows lets half of it fill and leaves a naked directional position; G buys both legs as
   one keep-whole group — one transaction with an atomic signer, an ordered sequence under G's sequential
   mode with a non-atomic one (which can leave the pair half-done between transactions, so G stops
   sending at the first failed, reverted or floor-breaching leg, reconciles from chain state and presents

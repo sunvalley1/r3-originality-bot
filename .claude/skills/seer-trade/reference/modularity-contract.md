@@ -57,7 +57,7 @@ Two more that answer different questions:
   both-sides rows are always pairs. It prices what risk control costs when you are right and saves when
   you are wrong.
 - **D → `../../deep-r3-trade/steps/D-methods/csv.md`** (deep-r3-trade's D, `../../deep-r3-trade/steps/D-forecast.md`,
-  under its default method: a human's CSV instead of research). **Shape-compatible, value-
+  from the provided CSV, the only way that skill implements: a human's CSV instead of research). **Shape-compatible, value-
   incompatible, and that is itself the finding.** It writes `invalid_p = 0.0` flatly, and reasoned E
   refuses any `0` in an `own` vector rather than flooring it. The naive pipeline runs it because its own
   E is the identity; the reasoned pipeline cannot, because an Invalid of zero asserts a fair `UP + DOWN`

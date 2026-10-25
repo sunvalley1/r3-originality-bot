@@ -1,6 +1,6 @@
 ---
 name: deep-r3-trade
-description: Run the naive baseline trading pipeline over the 98 Deep Funding Round 3 Originality repo markets on deep.seer.pm, or set up, fund, check or resume its trading wallet. Wallet onboarding enters I.1. After setup (one green supervised run plus the operator's standing authorization, asked on the first run, and a passing signer self-test) it trades autonomously every day through I.2, as Claude Code routines on any operating system; manual sessions run in supervised mode, with a human "yes" per batch. An AI agent runs every supervised run and every routine run. The method is a forecast by the operator's chosen method (a provided CSV by default, or the agent's price-blind AI research, or any other), no reconciliation, max-EV sizing, then mint, trade, merge and redeem on Optimism (atomic, or sequential for a non-atomic signer). Other Seer markets and contests belong to seer-trade.
+description: Run the naive baseline trading pipeline over the 98 Deep Funding Round 3 Originality repo markets on deep.seer.pm, or set up, fund, check or resume its trading wallet. Wallet onboarding enters I.1. After setup (one green supervised run plus the operator's standing authorization, asked on the first run, and a passing signer self-test) it trades autonomously every day through I.2, as Claude Code routines on any operating system; manual sessions run in supervised mode, with a human "yes" per batch. An AI agent runs every supervised run and every routine run. The method is D's forecast (by default a provided CSV, taken at face value as deep.seer.pm takes it), no reconciliation, max-EV sizing, then mint, trade, merge and redeem on Optimism (atomic, or sequential for a non-atomic signer). Other Seer markets and contests belong to seer-trade.
 ---
 
 # deep-r3-trade — the naive baseline, end to end
@@ -22,11 +22,10 @@ through the reasoned pipeline that `seer-trade` orchestrates — so the two can 
   correlation handling and no learning: it expresses the forecast at face value, at full size. Run it as written.
   Do not add brakes the human did not ask for, and do not steer the human toward blanking CSV cells, trading
   smaller or switching to `seer-trade`: those are the trader's choices, not the agent's.
-- **The forecast is a method, chosen by the operator** (`steps/D-forecast.md`, each method's page under
-  `steps/D-methods/`). The default, `csv`, reads a CSV the human provides, exactly as deep.seer.pm does: trading
-  through the bot is then trading through the interface every day. The `forecast-file` method reads a forecast file
-  that any source writes instead: the agent running this skill researching each repository price-blind, another
-  model, a script or a pool of forecasters. The agent never switches methods on its own.
+- **D's forecast is a provided CSV by default** (`steps/D-forecast.md`, `steps/D-methods/csv.md`): the human's CSV,
+  read exactly as deep.seer.pm reads it, so trading through the bot is trading through the interface every day. Any
+  other way to forecast (AI research, a model, a pool of forecasters) is a participant's own change to D, which this
+  skill does not implement. The agent never changes D on its own.
 - **An AI agent runs every supervised run and every routine run**. Scheduled runs are Claude Code routines (`steps/I-setup.md`
   I.2 §7), so they work on any operating system and need no machine left on.
 - **Traders customise it by editing a step.** Every simplification is listed in *What this baseline gives up*,
@@ -124,12 +123,12 @@ arms — that is what lets a step from one arm drop into the other. I writes non
 | A | `evm-onchain` skill | — | — | reference: Optimism addresses, RPC, gas ceiling, Uniswap, thin pools |
 | B | `seer-protocol` skill | — | — | reference: Router, ConditionalTokens, wrapped outcomes, the six artifact shapes |
 | C | `steps/C-select.md` | *none — entry step* | `candidates.json` | enumerate the 98 R3 markets from the v3 data function on `R3_DATA_HOST`, cross-check each against the static table (refusing any body whose addresses differ), screen nothing |
-| D | `steps/D-forecast.md`, with the chosen method's page in `steps/D-methods/` | `candidates.json` + *the method's input: the stored CSV or a new one from the human (`csv`, the default), or a forecast file from the AI research or any other source (`forecast-file`)* | `base-forecast.json` | one forecast per market by the operator's method: the CSV parsed and matched exactly as deep.seer.pm does, or a checked forecast file such as the agent's price-blind research; `price_seen: false` |
+| D | `steps/D-forecast.md`, with `steps/D-methods/csv.md` | `candidates.json` + *the stored CSV, or a new one from the human* | `base-forecast.json` | one forecast per market, by default the CSV parsed and matched exactly as deep.seer.pm does; `price_seen: false` |
 | E | `steps/E-no-reconcile.md` | `base-forecast.json`, `candidates.json` | `blended.json` | the identity: `blended = own`, `w = 1.0`, the price recorded and ignored |
 | F | `steps/F-max-ev.md` | `blended.json`, `candidates.json` + *the holder's repo-token and child-Invalid balance per market (no UP/DOWN read)* | `allocation.json` | per market `set-sell`, or `merge-arb` then the sub-1 pair (3a, 3b), then greedy marginal EV; `objective: "max-ev"`, 98 independent per-market budgets, one repo token each: that market's repo tokens already held plus the new mint `M` |
 | G | `steps/G-mint-and-trade.md` | `allocation.json` | `fills.json` | mint (parent, then each middle), route each fill, simulate, **human approval** (supervised mode; in autonomous mode see *Two modes*), send once; later exit, then merge and redeem child → middle → parent |
 | H | `steps/H-no-learn.md` | `fills.json`, `base-forecast.json`, `blended.json`, `allocation.json`, `candidates.json` | `review.json`, once a market has settled | realised payouts, Brier three ways, PnL attribution — and update nothing; until then it writes no file and says `nothing settled yet` |
-| I | `steps/I-setup.md` | I.1: wallet setup/funding/resume request, public signer metadata and expected identity. I.2: the operator's first-run answers, the first supervised run's artifacts and `report.md` (green-run check, I.2 §1) | `./run/setup.deep-r3-trade.json` | **I.1** reuse or create the wallet, verify signer and holder, report funding and atomic capability, then the PSM3 ramp/preflight. **I.2** the autonomous daily run — first-run consent, green-run gate, signer allowlist self-test, the forecast method's input (a stored CSV, or the research routine), run-id, lock, the Claude Code routines and `CADENCE` (I.2 §7–§8). **Not swappable** — see *Architecture* |
+| I | `steps/I-setup.md` | I.1: wallet setup/funding/resume request, public signer metadata and expected identity. I.2: the operator's first-run answers, the first supervised run's artifacts and `report.md` (green-run check, I.2 §1) | `./run/setup.deep-r3-trade.json` | **I.1** reuse or create the wallet, verify signer and holder, report funding and atomic capability, then the PSM3 ramp/preflight. **I.2** the autonomous daily run — first-run consent, green-run gate, signer allowlist self-test, stored CSV, run-id, lock, the Claude Code routine and `CADENCE` (I.2 §7–§8). **Not swappable** — see *Architecture* |
 
 **The run loop.** A and B are references, read when a step calls for them. For C–H **in that order** (I brackets them):
 
@@ -156,9 +155,9 @@ I.2   after a green supervised run, the operator's two yeses, a passing signer s
       (until then: no Q2 yes, no schedule, needs-planner)
                                                                ->  autonomy + schedule + first_successful_run
 then every autonomous run (interval = CADENCE, declared in I.2 §8), a Claude Code routine whose agent
-      first runs its prompt's code-pin check in the trading clone (after a `cd` into it when two
-      repositories are attached; any change outside run/ from the pinned tree, or a check that
-      could not run: stop, run nothing), then `node r3.cjs install` and `node r3.cjs trade --push`
+      first runs its prompt's code-pin check in the trading clone (any change outside run/ from the
+      pinned tree, or a check that could not run: stop, run nothing), then `node r3.cjs install` and
+      `node r3.cjs trade --push`
       (I.2 §7): r3.cjs first checks autonomy.signer_path and autonomy.planner_path and, if either is
       not this install's path, is missing, or its sha256 differs from autonomy.signer_sha256 or
       autonomy.planner_sha256, logs it, writes wake-status aborted with the reason and exits 4
@@ -248,7 +247,7 @@ drive the signer can trade.
    run-id. No human "yes" is needed. The scheduled run's planner applies it in the run that stopped and, to a group
    still half-done, at the next run's start-of-run repair (`steps/I-setup.md` I.2 §6 (a), (c)).
 7. **A daily report:** `./run/<run-id>/wake-status.json` (status `traded | nothing-to-do | no-csv |
-   csv-store-mismatch | no-forecast | aborted`) plus a short human-readable `./run/<run-id>/report.md` — what was sent (tx
+   csv-store-mismatch | aborted`) plus a short human-readable `./run/<run-id>/report.md` — what was sent (tx
    hashes), what was skipped and why, balances before and after, and P&L so far from H.
 
 **The first run asks the operator, in plain words.** In the first supervised session the skill explains what
@@ -263,13 +262,12 @@ used). It then asks for two explicit permissions:
    `./run/setup.deep-r3-trade.json`. A no keeps supervised mode only, and the skill never asks again unasked.
 2. **"Allow the trading routine to send through the signer without asking?"** The sender is the trading routine
    (`steps/I-setup.md` I.2 §7): its prompt pins the code of one commit of the trading repository by its tree
-   fingerprint and checks it as the agent's first command in the trading clone (after a `cd` into it when two
-   repositories are attached); its allowed tools are `Read`, `Bash(cd /home/user/<trading repo>)` (two repositories
-   only), the exact pin check `Bash(test "$(git ls-tree HEAD | awk -F '\t' '$2 != "run"' | git mktree)" = <tree>)`,
+   fingerprint and checks it as the agent's first command in the trading clone; its allowed tools are `Read`, the
+   exact pin check `Bash(test "$(git ls-tree HEAD | awk -F '\t' '$2 != "run"' | git mktree)" = <tree>)`,
    `Bash(node r3.cjs install)`, `Bash(node r3.cjs trade --push)` and `Bash(node r3.cjs status)`; its denied tools are
    `Bash(node r3.cjs planner *)`, `Bash(node r3.cjs planner)`, `Read(~/.r3-signer-keys/**)`, `Read(//proc/**)`,
-   `Read(//home/user/<research repo>/**)`, `Write`, `Edit`, `NotebookEdit`, `Glob`, `Grep`, `Skill`, `WebFetch`,
-   `WebSearch` and `Agent`; it has no connectors; and `r3.cjs trade` runs the planner, which starts the signer's
+   `Write`, `Edit`, `NotebookEdit`, `Glob`, `Grep`, `Skill`, `WebFetch`, `WebSearch` and `Agent`; it has no
+   connectors; and `r3.cjs trade` runs the planner, which starts the signer's
    `check`, `simulate` and `send` as its own child processes, which no Claude Code rule sees.
    A yes, given once that routine exists with exactly those tools and its pinned prompt and its setup run (the
    self-test and the planner's clearance) has passed, is recorded as `schedule.signer_allow_rule_added_at`. Without
@@ -284,7 +282,7 @@ Only after both yeses, the signer self-test, the one green supervised run, the r
 `node -e` and the planner with its clearance passed (below; both installed by the operator, or laid down from the
 pinned commit by `node r3.cjs install`) is the schedule registered in autonomous mode; later runs do not ask
 again. To revoke at any time: set `autonomy.enabled` to false, set `schedule.signer_allow_rule_added_at` to null and
-pause the routines. Removing `R3_KEYSTORE_JSON` and `R3_KEYSTORE_PASSWORD` from the trading environment stops new
+pause the trading routine. Removing `R3_KEYSTORE_JSON` and `R3_KEYSTORE_PASSWORD` from the trading environment stops new
 runs from getting the key; a past run's VM pauses with its files saved, the key files `install` wrote among them, and
 continuing its session restores it, so a trading run's session is never continued.
 
@@ -320,20 +318,16 @@ autonomous mode stays off (`autonomy.blocked: needs-wallet`), and supervised mod
 `steps/I-setup.md`.
 
 **The scheduled run re-enters at C, never at G.** It is the **trading routine**, a Claude Code routine on a cron
-schedule (`steps/I-setup.md` I.2 §7), working on the operator's private **trading repository**. Under D's `csv`
-method it attaches that repository alone and its session starts inside the clone. Under `forecast-file` with the
-research routine it also attaches the research repository; a session with several repositories starts in the folder
-above the clones (`/home/user/<repository name>` in the cloud), so the prompt's first command is
-`cd /home/user/<trading repo>`, and the Bash tool's working directory stays there. Its prompt pins the code of one
-commit of the trading repository by its tree fingerprint (the git tree of everything outside `run/`, which needs no
-history in the routine's shallow clone), and the agent's first command in the trading clone is
+schedule (`steps/I-setup.md` I.2 §7), working on the operator's private **trading repository**. It attaches that
+repository alone, and its session starts inside the clone. Its prompt pins the code of one commit of the trading
+repository by its tree fingerprint (the git tree of everything outside `run/`, which needs no history in the
+routine's shallow clone), and the agent's first command is
 `test "$(git ls-tree HEAD | awk -F '\t' '$2 != "run"' | git mktree)" = <pinned tree>`: on a non-zero exit (1: the code differs, or
 git could not compute the fingerprint and printed an error) the agent stops and reports the exit
-code, and reads and runs nothing else. The pin cannot cover what Claude Code loads at session start: with one
-repository, the clone's `.claude/settings.json` (permission rules, hooks, environment) and `.mcp.json`; in both cases,
-each clone's `CLAUDE.md`, `.claude/rules/`, `.claude/skills/`, `.claude/agents/` and `.claude/commands/`. So only the
-operator and the trading routine push to the trading repository, the routine pushes `run/` only, and the research
-repository is attached with a sparse checkout of `run/` only where the routine offers it. Where the routine cannot check out the research repository's `run/` alone, that clone's `CLAUDE.md`, rules, skills, agents and commands are in the trading session too, and the research routine can change them; then only the trading agent's denied `Skill` and research-clone `Read`, auto mode's classifier and its instructions stand between them and the key. Then the agent follows
+code, and reads and runs nothing else. The pin cannot cover what Claude Code loads at session start: the clone's
+`.claude/settings.json` (permission rules, hooks, environment) and `.mcp.json`, and its `CLAUDE.md`,
+`.claude/rules/`, `.claude/skills/`, `.claude/agents/` and `.claude/commands/`. So only the operator and the trading
+routine push to the trading repository, and the routine pushes `run/` only. Then the agent follows
 `routines/trade.md`: `node r3.cjs install`, then `node r3.cjs trade --push`, then a report. Its tools are Q2's list
 above, and it has no connectors. Its environment holds the wallet's keystore for the signer as ordinary environment
 variables: the agent never reads it, and what protects it is listed at the top of this section. `r3.cjs trade` refuses
@@ -343,17 +337,8 @@ runs that planner, never a path from a record. `r3.cjs`'s planner passthrough re
 refusal is keyed on those variables, so it is one layer, not a wall.
 **It computes C to H only through the planner** (`scripts/planner.cjs`), never by hand: `r3.cjs trade` takes the arm lock, checks the pinned planner and signer, and runs
 `node <planner path> wake <run-id>` exactly once (`steps/I-setup.md` I.2 §7); supervised sessions may use every
-planner subcommand (`node r3.cjs planner <subcommand> …`) or `node -e`, each call prompting the human. When D's
-`forecast-file` method takes the AI research (`steps/D-methods/ai-research.md`), a second routine, the **research
-routine** (`routines/research.md`), works on a private **research repository** of its own, holds no key, and makes
-the price-blind forecast file; it can never push to the trading repository. The trading routine attaches the research
-repository beside its own, and `r3.cjs trade` copies the newest young `research-forecast.json` from it into its own
-`run/` (`forecastImport`): only from folders named like research run-ids, and only a file whose `generated_at` is an
-ISO 8601 UTC timestamp. D then checks it like any forecast file, and its text never reaches the trading agent (D's
-refusal notes name rows and C's markets, and the report carries the method's sha256, not its text); its numbers are
-the forecast risk any source has. The trading agent never reads the research clone. The trading run reads the data
-function's raw body
-on `R3_DATA_HOST`, and makes its
+planner subcommand (`node r3.cjs planner <subcommand> …`) or `node -e`, each call prompting the human. The trading
+run reads the data function's raw body on `R3_DATA_HOST`, and makes its
 `eth_call`, `slot0`, quoter and bulk (`multicall`) reads, through the read-only chain helper, which the planner starts
 (a supervised session runs it as `node <chain helper path> …`, `steps/I-setup.md`),
 on a path outside the project and outside every Write path; the agent writes no key-handling code, the reference
@@ -368,11 +353,7 @@ mode the plan is built and sent in the same run. In supervised mode only, a plan
 `STALE_APPROVAL` after it was built is re-run from C in the same run-id: a queued ramp is sent first, on its own
 "yes", sUSDS re-read, C–F re-run in the same run-id with the real post-ramp bankroll, and gates 2 and 3 re-presented.
 
-**The forecast's input comes from its method** (`steps/D-forecast.md`). Under `forecast-file` (`ai` is its older
-name and still works), D takes the newest forecast file, `research-forecast.json`, made within `forecastMaxAgeHours`
-(12 by default), from the research routine (imported from the research repository, above), from any other source
-(`steps/D-methods/forecast-file.md`), or one already in the run-id's own folder; none young enough is a stop at D with `status: "no-forecast"`, and a malformed one is `forecast-refused`,
-recorded, never asked about. Under `csv`, the default (`steps/D-methods/csv.md`), **the CSV is this arm's wrinkle.** It is supplied **once** — by a human, in a session, at setup or in a
+**The CSV is this arm's wrinkle** (`steps/D-forecast.md`, `steps/D-methods/csv.md`). It is supplied **once** — by a human, in a session, at setup or in a
 supervised run — and then **stored**: `./run/csv/originality-v<N>-<slug>.csv`, write-once, pointed at by
 `./run/csv/current.json`. Every later wake **loads it and proceeds silently**; none asks for a fresh one and
 none blocks waiting for one. A newly supplied CSV supersedes it as a new version. No CSV ever provided is a
@@ -415,13 +396,10 @@ E and F in any supervised run whose holder holds USDC or USDS — is its own bat
 register a schedule until a supervised run has come back green; and, with a non-atomic signer, a recovery batch
 after a failed, reverted or floor-breaching transaction (*Money safety*) stops the sends and needs its own "yes".
 
-1. **D** needs its method's input. Under `csv`, the default: the stored CSV, or a fresh one the human hands over now
+1. **D** needs a CSV — the stored one, or a fresh one the human hands over now
    (`node r3.cjs planner d <run-id> --supply inputs/<file>.csv`, then the same with `--continue`), which supersedes
-   it. Under `forecast-file`: a young forecast file, from the research routine or a session working in a clone of
-   the research repository (`steps/D-methods/ai-research.md`), imported by `r3.cjs trade` or `r3.cjs clearance`
-   through `forecastImport`, or written by any other source (`steps/D-methods/forecast-file.md`). There is no
-   fallback forecast: without one the run records `no-csv` or
-   `no-forecast` (a Half A stop, `steps/I-setup.md` I.2 §2), and a scheduled run never asks.
+   it. There is no fallback forecast: if none was ever provided the run records `no-csv` (a Half A stop,
+   `steps/I-setup.md` I.2 §2), and a scheduled run never asks.
 2. **F's `allocation.json` is a plan, and a human reads and approves it before G runs at all.** Its print shows
    each market with both an UP and a DOWN row as "pair (sum < 1 − f)" with `q`, the locked-in sum, its outcome
    — `+(1 − sum)·q` repo tokens if the repo is evaluated, nothing of value lost if it is not — the two residual
@@ -535,9 +513,8 @@ before the v3 pools were seeded (2026-10-01); the live v3 book differs.
 
 - **No market selection.** C takes all 98 and screens nothing — not liquidity, not staleness, not whether
   anyone has ever traded that pool. `../seer-trade/steps/C-select-markets.md` screens.
-- **No research, under the default method.** D's `csv` method copies the human's CSV at face value
-  (`steps/D-methods/csv.md`). It does not read a repo, a dependency graph or
-  Round 2's realised scores, and it sets `p_invalid` flatly to 0.
+- **No research.** D copies the human's CSV at face value (`steps/D-methods/csv.md`). It does not read a repo, a
+  dependency graph or Round 2's realised scores, and it sets `p_invalid` flatly to 0.
 - **No reconciliation.** E is the identity with `w = 1.0`. The book is recorded and ignored — on the worked
   example's 2026-09-29 book, chainlist's pool priced child Invalid at 0.1368 against D's 0.0, a gap 3b sweeps as a
   pair rather than a reason to blend.
@@ -589,10 +566,10 @@ project root, the folder the human runs Claude Code in — never an absolute pat
 | To change | Edit |
 |---|---|
 | which markets are in scope, the embedded table of the 98 (repo tokens included), the data-function read and its host `R3_DATA_HOST` (the chain helper's `dataFunctionUrl` key follows it, `steps/I-setup.md` I.2 §7) | `steps/C-select.md` |
-| D's contract for every method: its input and output, how the method is chosen, its checks, stops and rules | `steps/D-forecast.md` |
-| D's methods: how the CSV is parsed, matched to repos, counted, **stored and reused** (`csv`, the default); a forecast file (`forecast-file`) from the price-blind AI research or from any other source | `steps/D-methods/csv.md`, `steps/D-methods/forecast-file.md`, `steps/D-methods/ai-research.md`; the research kit in `scripts/ai-forecast/` |
-| the scheduled runs: what the trading and the research routines' agents do | `routines/trade.md`, `routines/research.md` — set up as `steps/I-setup.md` I.2 §7 says |
-| the routine runner: installing the tools, the lock, the pins, the forecast import, one `wake`, pushing the run records | `scripts/routine.cjs` (`r3.cjs` at the project root) |
+| D's contract: its input and output, its checks, stops and rules; where a participant's own way to forecast replaces the CSV | `steps/D-forecast.md` |
+| how the CSV is parsed, matched to repos, counted — and how it is **stored and reused** | `steps/D-methods/csv.md` |
+| the scheduled run: what the trading routine's agent does | `routines/trade.md` — set up as `steps/I-setup.md` I.2 §7 says |
+| the routine runner: installing the tools, the lock, the pins, one `wake`, pushing the run records | `scripts/routine.cjs` (`r3.cjs` at the project root) |
 | the blend — i.e. to stop being the identity (**the control rule below applies**) | `steps/E-no-reconcile.md` |
 | the EV objective, the trade band, the 98 per-market budgets, the mint size `M` | `steps/F-max-ev.md` |
 | the mint, route, merge, exit or redeem calls; batching; the signer interface | `steps/G-mint-and-trade.md` |
@@ -607,12 +584,10 @@ invented in passing. **(1) Field names are fixed** by `seer-protocol` §10 in bo
 renamed one makes the next step refuse the file, so extras go in an existing free-text field (`reasoning` in
 `base-forecast.json`, `w_reason` in `blended.json`), never a new key a step relies on (a harness may add one
 top-level annotation such as `dry_run: true` to `allocation.json`, which no step reads: `seer-protocol` §10). **(2) D's
-`method` and `objective: "max-ev"` identify this arm** in the shared `./run/`: `"csv-face-value"` (method `csv`),
-or a method D marked as this arm's (method `forecast-file`: D writes `deep-r3-trade D, forecast file: ` in front of
-the file's free-text `method`; one that starts with the older prefix
-`seer-trade D (D-base-forecast.md) swapped into deep-r3-trade` is recognized too), `steps/D-forecast.md`,
-*Output schema*. A wake's Half B and H filter on exactly those, so a D whose
-method string is neither drops its runs out of rescoring: correct for a foreign run, but rescore it by hand.
+`method: "csv-face-value"` and `objective: "max-ev"` identify this arm** in the shared `./run/` (the planner also
+recognizes the two older prefixes that earlier run-ids carry: `steps/D-forecast.md`, *Output schema*). A wake's Half B
+and H filter on exactly those, so a changed D whose method string matches none of them drops its runs out of rescoring:
+correct for a foreign run, but rescore it by hand.
 **(3) The approval gate (supervised mode), the standing authorization with its checks (autonomous mode) and the
 never-re-send rule are not editable behaviour.**
 

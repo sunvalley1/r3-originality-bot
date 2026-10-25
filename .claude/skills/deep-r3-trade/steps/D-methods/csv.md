@@ -1,6 +1,6 @@
 # csv.md — the default method: the CSV is the forecast
 
-One way to make D's forecast, and the default one (`forecastMethod` absent or `"csv"`). D's contract, the same for every method — what D hands on, its checks, stops and rules — is `../D-forecast.md`.
+The default way to make D's forecast, and the only one this skill implements. D's contract — what D hands on, its checks, stops and rules — is `../D-forecast.md`.
 
 ## The method
 
@@ -10,15 +10,15 @@ match it to the markets exactly as the interface matches it, and write each row 
 forecast. No research, no adjustment, no price. **Never ask for a CSV you have already been given.**
 
 This is the naive baseline, the same trade a human makes by uploading the CSV to deep.seer.pm. Its simplicity is the
-product: someone runs it beside another method on the same 98 markets and compares. One deviation from the interface
+product: someone runs it beside another forecast on the same 98 markets and compares. One deviation from the interface
 is mandated and it is listed in step 5; everything else is transcription.
 
 ## Input
 
-- `candidates.json`, read as D reads it for every method (`../D-forecast.md`, *Input / Output*).
+- `candidates.json`, read as `../D-forecast.md`, *Input / Output*, says.
 - **The CSV:** the one the human supplies in this session if they supply one, otherwise the stored one that
   `./run/csv/current.json` points at (*The CSV store*, below). This method never asks again for a CSV it has already been given.
-- **Planner:** `node <planner path> d <run-id>` runs this method on the stored CSV. In a supervised session, whatever the configured method, `d <run-id> --supply <csv>` prints step 5's report and stores a new CSV version only when re-run with `--continue`, the human's "continue" (`../I-setup.md` I.2 §7, *The planner*).
+- **Planner:** `node <planner path> d <run-id>` runs this method on the stored CSV. In a supervised session `d <run-id> --supply <csv>` prints step 5's report and stores a new CSV version only when re-run with `--continue`, the human's "continue" (`../I-setup.md` I.2 §7, *The planner*).
 
 ## The procedure
 
@@ -289,7 +289,7 @@ row reads identically except for the closing clause, which becomes `reused uncha
 
 ## Hard rules of this method
 
-These are the CSV method's own. D's rules for every method (`../D-forecast.md`, *Hard rules*) hold too.
+These are the CSV method's own. D's rules (`../D-forecast.md`, *Hard rules*) hold too.
 
 1. **Never invent, infer or adjust an originality number.** A repo you have never heard of and one you are
    certain about get identical treatment: whatever the cell says.
