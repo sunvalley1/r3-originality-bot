@@ -1051,7 +1051,9 @@ async function recPair(env, book, buy, P, quoted, own, tag) {
 }
 // 2. completing the group: its transactions from L on (null: no usable quote)
 async function recCompletion(env, book, g, L, IF, bal, ef, tag) {
-  const rem = g.txs.slice(L).map((t) => ({ label: t.label, to: lc(t.to), data: t.data, calldata_keccak256: lc(t.calldata_keccak256), role: 'complete', planIdx: t.idx }));
+  // planIdx is the transaction's position in the group (0 = its first), as L, recPair's 4 and 5, and completed_idx count;
+  // g.txs[k].idx numbers it in the whole plan and is not used here
+  const rem = g.txs.slice(L).map((t, k) => ({ label: t.label, to: lc(t.to), data: t.data, calldata_keccak256: lc(t.calldata_keccak256), role: 'complete', planIdx: L + k }));
   if (g.kind !== 'complex-buy') return { txs: rem };
   const own = g.allocation_rows[0].side;
   const sale = IF.parseTransaction({ data: g.txs[3].data }).args[0]; const buy = IF.parseTransaction({ data: g.txs[5].data }).args[0];
@@ -1137,13 +1139,15 @@ async function recoverGroup({ env, book, gid, trigger, by, failed = null }) {
       const m = g.market_refs || null; const own = g.allocation_rows && g.allocation_rows[0] ? g.allocation_rows[0].side : null;
       const position = g.txs.slice(0, L).some((t) => IF.parseTransaction({ data: t.data }).name !== 'approve');
       // the landed legs of a merge-arb (no row until its merge): kept as filled rows before anything is unwound or kept
-      const landedHash = (t) => { const h = (gs.txs || []).find((x) => x.hash && (x.idx === t.idx || x.nonce === t.nonce_expected)); if (h) return h.hash; for (const a of (prev && prev.attempts) || []) for (const u of a.txs || []) if (u.plan_idx === t.idx && u.tx_hash) return u.tx_hash; return null; };
+      // an attempt's plan_idx is the position k in the group; one written before positions were used held the plan's idx
+      const landedHash = (t, k) => { const h = (gs.txs || []).find((x) => x.hash && (x.idx === t.idx || x.nonce === t.nonce_expected)); if (h) return h.hash; for (const a of (prev && prev.attempts) || []) for (const u of a.txs || []) if ((u.plan_idx === k || u.plan_idx === t.idx) && u.tx_hash) return u.tx_hash; return null; };
       const legRows = () => {
         if (g.kind !== 'merge-arb') return;
         const have = new Set(book.fills().runs.map((r) => lc(r.tx_hash || '')));
-        for (const t of g.txs.slice(0, L)) {
+        for (let k = 0; k < L; k++) {
+          const t = g.txs[k];
           const d = IF.parseTransaction({ data: t.data }); if (d.name !== 'exactOutputSingle') continue;
-          const h = { hash: landedHash(t) }; if (!h.hash || have.has(lc(h.hash))) continue;
+          const h = { hash: landedHash(t, k) }; if (!h.hash || have.has(lc(h.hash))) continue;
           const out = BigInt(d.args[0].amountOut); const side = lc(d.args[0].tokenOut) === lc(m.up) ? 'UP' : 'DOWN';
           addRow({ market: g.market, address: lc(g.address), side, route: 'buy-and-merge', requested: num(out), filled: num(out), fill_price: num(BigInt(d.args[0].amountInMaximum)) / num(out), tx_hash: h.hash, error: errText('the landed leg, kept as a filled row; fill_price from amountInMaximum, a ceiling') });
         }

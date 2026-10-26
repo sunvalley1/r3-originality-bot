@@ -501,6 +501,7 @@ async function offline() {
     }
     eq((await H(['chain-id', 'extra'])).json.code, 'usage');
     eq((await H(['nonce'])).json.code, 'usage');
+    eq((await H(['nonce', ADDR1, '16', 'extra'])).json.code, 'usage');
     eq(mock.http.length, 0, 'no HTTP request may have been made');
     await mock.close();
   });
@@ -535,8 +536,8 @@ async function offline() {
       let err = null;
       try { await lib.rpcBatch(cfg, [{ method: 'eth_blockNumber', params: [] }, { method: 'eth_sendRawTransaction', params: ['0x'] }]); } catch (e) { err = e; }
       ok(err && err.code === 'forbidden_method', 'mixed batch refused');
-      // eth_getTransactionCount only at latest or pending
-      for (const tag of ['earliest', '0x10', 'finalized', undefined]) {
+      // eth_getTransactionCount only at latest, pending or a lowercase hex block number
+      for (const tag of ['earliest', 'finalized', 'safe', undefined, '16', '0X10', '0x', 'latest ']) {
         err = null;
         try { await lib.rpcBatch(cfg, [{ method: 'eth_getTransactionCount', params: [ADDR1, tag] }]); } catch (e) { err = e; }
         ok(err && err.code === 'forbidden_method', `tx count at ${tag} refused`);
@@ -555,6 +556,8 @@ async function offline() {
       };
       const out = await lib.rpcBatch(cfg, [{ method: 'eth_blockNumber', params: [] }]);
       eq(out[0].result, '0x5'); eq(fetchCalls, 1, 'one fetch for an allowed batch');
+      const past = await lib.rpcBatch(cfg, [{ method: 'eth_getTransactionCount', params: [ADDR1, '0x10'] }]);
+      eq(past[0].result, '0x5'); eq(fetchCalls, 2, 'a nonce at a hex block number reaches fetch');
     } finally {
       globalThis.fetch = realFetch;
       process.chdir(savedCwd);
@@ -954,6 +957,34 @@ async function offline() {
     const r2 = await helperIn(L)(['nonce', ADDR1]);
     eq(r2.code, 0, r2.stdout); eq(r2.json.latest, 4);
     ok(mock.http.length >= 4 && mock.http.every((h) => !h.isBatch || h.items.length === 3), 'fell back to single requests');
+    await mock.close();
+  });
+
+  await test('nonce <address> <block>: one eth_getTransactionCount at that hex block, decimal or 0x accepted; latest, pending and junk refused before any request; a node without that state is state_unavailable (exit 5), any other RPC error stays rpc_error', async () => {
+    const mock = await startMock();
+    mock.rpc.eth_getTransactionCount = (p) => (p[1] === '0x9c0e3d5' ? '0x55e' : p[1] === '0x9c0e3d6' ? '0x55f' : '0x1');
+    const L = makeLayout('nonce-at', mockConfig(mock));
+    for (const [arg, want] of [['163636181', 0x55e], ['0x9c0e3d6', 0x55f], ['0x9C0E3D6', 0x55f]]) {
+      mock.http.length = 0;
+      const r = await helperIn(L)(['nonce', ADDR1, arg]);
+      eq(r.code, 0, r.stdout); eq(r.json, { address: r.json.address, block: Number(BigInt(arg)), nonce: want });
+      const items = mock.http.flatMap((h) => h.items).filter((i) => i.method === 'eth_getTransactionCount');
+      eq(items.length, 1, 'one nonce read'); eq(items[0].params[1], '0x' + BigInt(arg).toString(16));
+    }
+    mock.http.length = 0;
+    for (const arg of ['latest', 'pending', 'earliest', '-1', '1.5', '0x', 'abc']) {
+      const r = await helperIn(L)(['nonce', ADDR1, arg]);
+      eq(r.code, 2, `${arg}: ${r.stdout}`); eq(r.json.code, 'bad_argument', arg);
+    }
+    eq(mock.http.length, 0, 'no request for a refused block');
+    for (const msg of ['missing trie node 6d5a (path ) state 0x6d5a is not available', 'historical state 0xab is not available', 'project ID does not have access to archive state']) {
+      mock.rpc.eth_getTransactionCount = () => ({ __error: { code: -32000, message: msg } });
+      const r = await helperIn(L)(['nonce', ADDR1, '16']);
+      eq(r.code, 5, r.stdout); eq(r.json.code, 'state_unavailable', msg);
+    }
+    mock.rpc.eth_getTransactionCount = () => ({ __error: { code: -32000, message: 'header not found' } });
+    const r = await helperIn(L)(['nonce', ADDR1, '16']);
+    eq(r.code, 5, r.stdout); eq(r.json.code, 'rpc_error', 'header not found stays rpc_error, re-run as transient');
     await mock.close();
   });
 
@@ -1817,6 +1848,7 @@ async function live() {
     const b = must(await H(['block']));
     ok(b.number > 100000000 && Math.abs(Date.now() / 1000 - b.timestamp) < 600, `latest block ${b.number} ts ${b.timestamp}`);
     const n = must(await H(['nonce', THROWAWAY])); eq([n.latest, n.pending], [0, 0]);
+    const np = must(await H(['nonce', THROWAWAY, String(b.number - 20000)])); eq([np.block, np.nonce], [b.number - 20000, 0]);
     eq(must(await H(['balance', THROWAWAY])).wei, '0');
     const c = must(await H(['code', A.mc3])); eq(c.has_code, true); ok(c.bytes > 1000);
     eq(must(await H(['code', THROWAWAY])).has_code, false);

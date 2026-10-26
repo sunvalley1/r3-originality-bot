@@ -284,7 +284,45 @@ async function presend(env, book, tx, n) {
 // nonce-attempts.json or inflight.json; it advances only past blocks read whole that hold no transaction of the holder
 // at n, never past a matched block whose receipt is not readable yet, and it is saved as the scan goes, so a run killed
 // mid-scan loses nothing and no block is skipped. o.deadlineMs (else env.deadlineMs, else now + SCAN_BUDGET_MS) bounds it.
+// Before the scan, the block where n was spent is looked up from the holder's nonce at past blocks (nonceSpentAt); the
+// scan runs only when that lookup finds nothing usable, so a cancel mined hours after from_block costs seconds, not hours,
+// and a scan's answer names the reason it ran.
 // ---------------------------------------------------------------------------------------------------------------
+// The first block in [lo, hi] at whose end the holder's nonce is above n, the block holding the holder's transaction at n,
+// from the helper's `nonce <address> <block>`: down from hi in doubling steps until a block whose nonce is not above n
+// (never below lo - 1), then a binary search between the two, about 2 x log2(hi - block) reads. Starting from the head
+// keeps it working on an RPC that holds only recent state when the nonce was spent recently. { block } or
+// { block: null, why } when the nonce is not above n at hi or was already above n before lo, the RPC cannot answer a
+// past-block nonce (a pruned node, a helper without the extension), or time runs out.
+async function nonceSpentAt(env, n, lo, hi, inTime) {
+  const at = async (bn) => {
+    let j;
+    try { j = await env.H(['nonce', env.holder, String(bn)]); } catch (e) { throw new Error(`the nonce at block ${bn} could not be read (${clip((e && (e.code || e.message)) || e, 80)})`); }
+    if (!j || !Number.isInteger(j.nonce) || j.block !== bn) throw new Error(`the helper printed no nonce for block ${bn}`);
+    return j.nonce;
+  };
+  const late = { block: null, why: 'out of time' };
+  try {
+    if (!(Number.isInteger(lo) && Number.isInteger(hi) && lo >= 1 && lo <= hi)) return { block: null, why: `no block range ${lo}..${hi}` };
+    if (!inTime()) return late;
+    if (!((await at(hi)) > n)) return { block: null, why: `the nonce at block ${hi} is not above ${n}` };
+    let top = hi; let step = 1; let low;
+    for (;;) {
+      if (!inTime()) return late;
+      low = Math.max(lo - 1, top - step);
+      if ((await at(low)) <= n) break;
+      if (low === lo - 1) return { block: null, why: `the nonce was already above ${n} at block ${lo - 1}, before the scan's start` };
+      top = low; step *= 2;
+    }
+    let a = low + 1; let b = top; // the nonce is not above n at low and is above n at top
+    while (a < b) {
+      if (!inTime()) return late;
+      const mid = a + Math.floor((b - a) / 2);
+      if ((await at(mid)) > n) b = mid; else a = mid + 1;
+    }
+    return { block: a };
+  } catch (e) { return { block: null, why: clip(e && e.message || e, 160) }; }
+}
 async function settleNonce(env, book, n, o = {}) {
   const att = liveAttempts(book.attempts(), n);
   const nn = await env.H(['nonce', env.holder]);
@@ -305,21 +343,37 @@ async function settleNonce(env, book, n, o = {}) {
     const from = saved !== null && saved > start ? saved : start;
     let b = from; let saveAt = from + SCAN_SAVE_EVERY;
     const save = () => { cur[String(n)] = { next_block: b, head_at_last_scan: head, updated_at: lib.nowIso() }; book.writeJson('settle-scan.json', cur); };
+    // the holder's transaction at n in block bn, judged by step 4's match rule; null when the block holds none
+    const judge = async (blk, bn) => {
+      for (const t of blk.txs_from || []) {
+        if (t.nonce !== n) continue;
+        const m = att.some((a) => (a.tx_hash && lc(a.tx_hash) === lc(t.hash)) || (a.calldata_hash && lc(a.calldata_hash) === lc(t.input_keccak256) && (a.to === null || a.to === undefined || lc(a.to) === lc(t.to))));
+        if (m) { const r = await env.H(['receipt', t.hash]); if (!r.found) return { ...res, outcome: 'pending', via: `block ${bn}: matched, receipt not readable yet` }; return { ...res, outcome: 'landed', via: `block ${bn}: (nonce, to, input hash) match an attempt`, hash: t.hash, receipt: r }; }
+        if (att.every((a) => a.calldata_hash)) return { ...res, outcome: 'not-sent', foreign: { hash: t.hash, input_keccak256: t.input_keccak256, to: t.to, block: bn }, via: 'a foreign transaction mined at n matches no recorded attempt' };
+        return { ...res, outcome: 'pending', via: 'a transaction is mined at n and an attempt with a null calldata_hash cannot be excluded' };
+      }
+      return null;
+    };
+    // The block where n was spent, from the holder's nonce at past blocks: a few dozen reads instead of one per block. It
+    // is used only when that block really holds the holder's transaction at n; otherwise the forward scan below decides,
+    // and its answer says why (`fwd`).
+    const spent = await nonceSpentAt(env, n, from, head, () => now() < stopAt);
+    let why = spent.why;
+    if (spent.block !== null) {
+      let hit = null;
+      try { hit = await judge(await env.H(['block', String(spent.block), env.holder]), spent.block); why = `block ${spent.block}, where the nonce passed n, holds no transaction of the holder at n`; } catch (e) { why = `block ${spent.block} could not be read (${clip((e && (e.code || e.message)) || e, 80)})`; }
+      if (hit) return { ...hit, via: `${hit.via} (the block where the nonce passed n, found from the nonce at past blocks)` };
+    }
+    const fwd = (r) => ({ ...r, via: `${r.via} (forward block scan: the nonce at past blocks gave nothing usable: ${why})` });
     try {
       while (b <= head && now() < stopAt) {
-        const blk = await env.H(['block', String(b), env.holder]);
-        for (const t of blk.txs_from || []) {
-          if (t.nonce !== n) continue;
-          const m = att.some((a) => (a.tx_hash && lc(a.tx_hash) === lc(t.hash)) || (a.calldata_hash && lc(a.calldata_hash) === lc(t.input_keccak256) && (a.to === null || a.to === undefined || lc(a.to) === lc(t.to))));
-          if (m) { const r = await env.H(['receipt', t.hash]); if (!r.found) return { ...res, outcome: 'pending', via: `block ${b}: matched, receipt not readable yet` }; return { ...res, outcome: 'landed', via: `block ${b}: (nonce, to, input hash) match an attempt`, hash: t.hash, receipt: r }; }
-          if (att.every((a) => a.calldata_hash)) return { ...res, outcome: 'not-sent', foreign: { hash: t.hash, input_keccak256: t.input_keccak256, to: t.to, block: b }, via: 'a foreign transaction mined at n matches no recorded attempt' };
-          return { ...res, outcome: 'pending', via: 'a transaction is mined at n and an attempt with a null calldata_hash cannot be excluded' };
-        }
+        const hit = await judge(await env.H(['block', String(b), env.holder]), b);
+        if (hit) return fwd(hit);
         b++; // block b - 1 was read whole and holds no transaction of the holder at n
         if (b >= saveAt) { save(); saveAt = b + SCAN_SAVE_EVERY; }
       }
     } finally { if (b !== from) save(); }
-    return { ...res, outcome: 'pending', via: b > head ? `latest ${nn.latest} > n but no transaction at n was found in blocks ${start}..${head}: unconfirmed, not failed` : `${b > from ? `scanned blocks ${from}..${b - 1}` : 'no block read'} of head ${head} within this run's time budget, no transaction at n yet: unconfirmed, not failed; resumes at block ${b} at the next settlement` };
+    return fwd({ ...res, outcome: 'pending', via: b > head ? `latest ${nn.latest} > n but no transaction at n was found in blocks ${start}..${head}: unconfirmed, not failed` : `${b > from ? `scanned blocks ${from}..${b - 1}` : 'no block read'} of head ${head} within this run's time budget, no transaction at n yet: unconfirmed, not failed; resumes at block ${b} at the next settlement` });
   }
   if (nn.pending > n) return { ...res, outcome: 'pending', via: 'the pending nonce is above n, the latest is not' };
   return { ...res, outcome: 'not-sent', via: 'latest == pending == n' };

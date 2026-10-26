@@ -13,7 +13,7 @@
  *   - the only files it ever writes are ./run/<run-id>/r3-data.json and ./run/<run-id>/tx-<hash>.input.
  *
  * Beyond the spec's subcommand list (all read-only, no new method, no new write path, no new network target):
- * `code`, `data-rows` and `multicall`, `block <n> <address>`, `@run/<run-id>/<file>` argument files, and the
+ * `code`, `data-rows` and `multicall`, `block <n> <address>`, `nonce <address> <block>`, `@run/<run-id>/<file>` argument files, and the
  * grouped form of `simulate` (one blockStateCalls entry per group of calls), and the `"return": true` flag on a
  * `simulate` call (its returnData is printed in a compact `returns` list). See chain-helper.README.md.
  *
@@ -434,8 +434,8 @@ function assertMethodAllowed(method, params) {
   if (typeof method !== 'string' || !ALLOWED_SET.has(method)) {
     throw new HelperError('forbidden_method', `method not on the fixed read-only list: ${clip(method, 60)}`, EXIT.FORBIDDEN);
   }
-  if (method === 'eth_getTransactionCount' && !(Array.isArray(params) && (params[1] === 'latest' || params[1] === 'pending'))) {
-    throw new HelperError('forbidden_method', 'eth_getTransactionCount is allowed for latest and pending only', EXIT.FORBIDDEN);
+  if (method === 'eth_getTransactionCount' && !(Array.isArray(params) && (params[1] === 'latest' || params[1] === 'pending' || /^0x[0-9a-f]+$/.test(String(params[1]))))) {
+    throw new HelperError('forbidden_method', 'eth_getTransactionCount takes latest, pending or a hex block number', EXIT.FORBIDDEN);
   }
   if (method === 'eth_getBlockByNumber' && !(Array.isArray(params) && (params[0] === 'latest' || /^0x[0-9a-f]+$/.test(String(params[0]))))) {
     throw new HelperError('forbidden_method', 'eth_getBlockByNumber takes latest or a hex number', EXIT.FORBIDDEN);
@@ -760,8 +760,19 @@ async function cmdBlock(cfg, [tagArg, addrArg]) {
   return out;
 }
 
-async function cmdNonce(cfg, [addrArg]) {
+// nonce <address> [<block>]: with <block> (extension), the nonce at the end of that past block alone, which is how a
+// settlement finds the one block where a nonce was spent without reading every block (planner.README.md section 6).
+// A node that keeps no state that far back answers state_unavailable, not the retried rpc_error: asking again won't help.
+const STATE_GONE = /missing trie node|historical state|state (is )?not available|not available.{0,40}state|archive (state|node)|pruned/i;
+async function cmdNonce(cfg, [addrArg, blockArg]) {
   const addr = normAddr(addrArg);
+  if (blockArg !== undefined) {
+    if (!/^(\d+|0x[0-9a-fA-F]+)$/.test(blockArg)) throw bad('block must be a decimal number or a 0x number');
+    const tag = parseBlockTag(blockArg);
+    const [el] = await rpcBatch(cfg, [{ method: 'eth_getTransactionCount', params: [addr, tag] }]);
+    if (el.error && STATE_GONE.test(String(el.error.message || ''))) throw new HelperError('state_unavailable', `nonce at block: ${clip(el.error.message, 200)}`, EXIT.NET, { rpc_code: el.error.code });
+    return { address: addr, block: Number(BigInt(tag)), nonce: Number(BigInt(unwrap(el, 'nonce at block'))) };
+  }
   const [a, b] = await rpcBatch(cfg, [
     { method: 'eth_getTransactionCount', params: [addr, 'latest'] },
     { method: 'eth_getTransactionCount', params: [addr, 'pending'] },
@@ -1424,7 +1435,7 @@ function cmdDataRows(cfg, [runId, offArg, countArg]) {
 const COMMANDS = {
   'chain-id': { min: 0, max: 0, usage: 'chain-id', run: cmdChainId },
   block: { min: 0, max: 2, usage: 'block [latest|<number>] [<address>]', run: cmdBlock },
-  nonce: { min: 1, max: 1, usage: 'nonce <address>', run: cmdNonce },
+  nonce: { min: 1, max: 2, usage: 'nonce <address> [<block>]', run: cmdNonce },
   balance: { min: 1, max: 1, usage: 'balance <address>', run: cmdBalance },
   code: { min: 1, max: 1, usage: 'code <address>', run: cmdCode },
   receipt: { min: 1, max: 1, usage: 'receipt <txhash>', run: cmdReceipt },

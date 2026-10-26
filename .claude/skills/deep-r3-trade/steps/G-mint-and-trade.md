@@ -1076,7 +1076,7 @@ a repair before comparing any input; its path is the `log_path` the signer print
 `calldata_hash`, into `inflight.json` and the attempt list from that log (only a line within step 4's scope: at or
 after that run-id's start, matched on (nonce, `input_hash`)), or from the call's output, once
 it is readable (local bookkeeping), and never compute the `hash` yourself. Where no `tx_hash` was recorded, or no receipt exists for the
-recorded one while the latest nonce is above `n`, settle by scanning forward from that attempt's `from_block` (`I-setup.md` I.2 §7's settlement reads) for
+recorded one while the latest nonce is above `n`, settle by finding, at or after that attempt's `from_block` (`I-setup.md` I.2 §7's settlement reads),
 the transaction from `from_address` at nonce `n` and judge it by step 4 (Landed, Not sent, or Pending). **A send is not idempotent: never re-run one** (a throttled `send` that printed no `broadcast` line signed nothing
 and is re-run: `I-setup.md` I.2 §7, *Rate limits*). If a send returns a hash you cannot confirm, stop
 and reconcile from chain state; do not resend. It is unconfirmed, not failed (sequential step 4), on any

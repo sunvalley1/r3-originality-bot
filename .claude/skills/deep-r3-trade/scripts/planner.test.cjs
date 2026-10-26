@@ -406,6 +406,8 @@ function helperDispatch(M, sub, args) {
   switch (sub) {
     case 'chain-id': return { chain_id: 10, expected: 10, ok: true };
     case 'nonce': {
+      // the past-block form, as a helper without it answers: the settlement then takes its forward block scan
+      if (args[1] !== undefined) mockFail('usage', 'usage: nonce <address>', 2);
       M.calls.nonce++;
       let latest = w.nonce; let pending = pendingOf(w);
       if (sc.nonceBump && M.calls.nonce > sc.nonceBump.after) { latest++; pending++; }
@@ -1032,6 +1034,87 @@ async function libSection(L) {
     ok(fs.readFileSync(path.join(L.proj, 'run', rid, 'nonce-attempts.json')).equals(att0), 'nonce-attempts.json changed');
     rmrf(path.join(L.proj, 'run', rid));
   });
+  // the same settlement through the nonce at past blocks (exec-core nonceSpentAt): the block where n was spent, found from
+  // `nonce <address> <block>` (down from the head in doubling steps, then a binary search), is read alone; any doubt about
+  // it leaves the decision to the forward scan, whose answer then says why
+  const pastScan = async (rid, o, check) => {
+    rmrf(path.join(L.proj, 'run', rid)); fs.mkdirSync(path.join(L.proj, 'run', rid), { recursive: true });
+    fs.writeFileSync(path.join(L.proj, 'run', rid, 'nonce-attempts.json'), JSON.stringify([{ nonce: o.N, to: o.TO, calldata_hash: o.H, from_block: o.FROM }]));
+    const att0 = fs.readFileSync(path.join(L.proj, 'run', rid, 'nonce-attempts.json'));
+    const reads = new Map(); let nonceReads = 0;
+    const c = { cfg, log: () => {}, signer: async () => { throw new Error('no signer call'); }, helper: async (args) => {
+      if (args[0] === 'nonce' && args[2] !== undefined) {
+        nonceReads++; const b = Number(args[2]);
+        if (!o.nonceAt) throw new Error('helper: usage: nonce <address>');
+        if (o.stateFrom !== undefined && b < o.stateFrom) throw Object.assign(new Error('nonce at block: missing trie node'), { code: 'state_unavailable' });
+        return { json: { address: HOLDER, block: b, nonce: o.nonceAt(b) } };
+      }
+      if (args[0] === 'nonce') return { json: { latest: o.N + 1, pending: o.N + 1 } };
+      if (args[0] === 'receipt') return { json: o.receipt && o.receipt.hash === args[1] ? o.receipt : { found: false } };
+      if (args[0] === 'block' && args[1] === 'latest') return { json: { number: o.HEAD } };
+      if (args[0] === 'block') { const b = Number(args[1]); reads.set(b, (reads.get(b) || 0) + 1); return { json: { number: b, txs_from: b === o.AT ? [o.tx] : [] } }; }
+      throw new Error('unexpected ' + args.join(' '));
+    } };
+    const s = await X.settleNonce(X.makeEnv(c, { step: 'W', holder: HOLDER, setup: null }), new X.Book(cfg, rid), o.N, { budgetMs: 60000 });
+    check(s, reads, nonceReads, exists(path.join(L.proj, 'run', rid, 'settle-scan.json')));
+    ok(fs.readFileSync(path.join(L.proj, 'run', rid, 'nonce-attempts.json')).equals(att0), 'nonce-attempts.json changed');
+    rmrf(path.join(L.proj, 'run', rid));
+  };
+  const spentFrom = (at, n) => (b) => (b >= at ? n + 1 : n);
+  const base = (FROM, AT, HEAD = AT + 10) => ({ N: 9, FROM, AT, HEAD, TO: '0x' + '22'.repeat(20), H: '0x' + 'ab'.repeat(32) });
+  const cancelAt = (AT, N) => ({ nonce: N, hash: '0x' + 'ee'.repeat(32), to: HOLDER, input_keccak256: '0x' + 'ff'.repeat(32) });
+  const HIT = /found from the nonce at past blocks/; const FWD = /forward block scan: the nonce at past blocks gave nothing usable: /;
+  const noGap = (o, reads) => { let gap = 0; for (let b = o.FROM; b <= o.AT; b++) if (reads.get(b) !== 1) gap++; return gap; };
+  await test('settlement by the nonce at past blocks: a cancel mined 40,000 blocks past from_block is found in one settlement, at most 40 nonce reads and one block read (the cancel\'s); Not sent, foreign; no cursor written; nonce-attempts.json byte-identical', async () => {
+    const o = base(5000, 45000); Object.assign(o, { nonceAt: spentFrom(o.AT, o.N), tx: cancelAt(o.AT, o.N) });
+    await pastScan('scan-past-1', o, (s, reads, nonceReads, cursor) => {
+      ok(s.outcome === 'not-sent' && s.foreign && s.foreign.block === o.AT && HIT.test(s.via) && !FWD.test(s.via), JSON.stringify(s));
+      ok(nonceReads <= 40 && reads.size === 1 && reads.get(o.AT) === 1 && !cursor, `nonce reads ${nonceReads}, blocks read ${JSON.stringify([...reads])}, cursor ${cursor}`);
+    });
+  });
+  await test('settlement by the nonce at past blocks: the attempt itself, mined 40,000 blocks late under another hash (a fee bump: same to and input hash), is Landed with its receipt; so is one mined in from_block itself', async () => {
+    for (const AT of [45000, 5000]) {
+      const o = base(5000, AT); const hash = '0x' + 'cc'.repeat(32);
+      Object.assign(o, { nonceAt: spentFrom(o.AT, o.N), tx: { nonce: o.N, hash, to: o.TO, input_keccak256: o.H }, receipt: { found: true, hash, success: true, status: '0x1' } });
+      await pastScan('scan-past-2', o, (s, reads, nonceReads) => {
+        ok(s.outcome === 'landed' && s.hash === hash && s.receipt && s.receipt.success === true && HIT.test(s.via), `at ${AT}: ${JSON.stringify(s)}`);
+        ok(nonceReads <= 40 && reads.size === 1 && reads.get(o.AT) === 1, `at ${AT}: nonce reads ${nonceReads}, blocks read ${JSON.stringify([...reads])}`);
+      });
+    }
+  });
+  await test('settlement by the nonce at past blocks: an RPC that keeps only recent state still finds a cancel mined recently (the search starts at the head); one mined before that state starts goes to the forward scan, which names the unreadable block', async () => {
+    const o = base(5000, 44000, 45010); Object.assign(o, { stateFrom: 45010 - 3000, nonceAt: spentFrom(44000, 9), tx: cancelAt(44000, 9) });
+    await pastScan('scan-past-5', o, (s, reads, nonceReads) => {
+      ok(s.outcome === 'not-sent' && s.foreign && s.foreign.block === o.AT && HIT.test(s.via), JSON.stringify(s));
+      ok(nonceReads <= 40 && reads.size === 1, `nonce reads ${nonceReads}, blocks read ${reads.size}`);
+    });
+    const p = base(5000, 5300, 45010); Object.assign(p, { stateFrom: 45010 - 3000, nonceAt: spentFrom(5300, 9), tx: cancelAt(5300, 9) });
+    await pastScan('scan-past-6', p, (s, reads) => {
+      ok(s.outcome === 'not-sent' && s.foreign && s.foreign.block === p.AT && FWD.test(s.via) && /the nonce at block \d+ could not be read \(state_unavailable\)/.test(s.via), JSON.stringify(s));
+      ok(noGap(p, reads) === 0, `${noGap(p, reads)} blocks not read exactly once`);
+    });
+  });
+  await test('settlement by the nonce at past blocks: a helper or RPC that cannot answer a past-block nonce leaves the forward scan to decide, as before: every block from from_block to the cancel read once, none skipped; the answer says why', async () => {
+    const o = base(5000, 5300); Object.assign(o, { nonceAt: null, tx: cancelAt(o.AT, o.N) });
+    await pastScan('scan-past-3', o, (s, reads, nonceReads) => {
+      ok(s.outcome === 'not-sent' && s.foreign && s.foreign.block === o.AT && FWD.test(s.via) && /the nonce at block 5310 could not be read/.test(s.via), JSON.stringify(s));
+      ok(nonceReads === 1 && noGap(o, reads) === 0 && reads.size === o.AT - o.FROM + 1, `nonce reads ${nonceReads}, blocks not read exactly once ${noGap(o, reads)}, read ${reads.size}`);
+    });
+  });
+  await test('settlement by the nonce at past blocks: a search that points at a block without the holder\'s transaction at n (an RPC that disagrees with itself) is ignored, and so is a nonce already above n before from_block; the forward scan then finds the cancel with no block skipped and says why', async () => {
+    const cases = [
+      ['points 100 blocks early', (o) => spentFrom(o.AT - 100, o.N), /block 5200, where the nonce passed n, holds no transaction of the holder at n/],
+      ['spent before from_block', (o) => () => o.N + 1, /the nonce was already above 9 at block 4999, before the scan's start/],
+    ];
+    for (const [what, at, why] of cases) {
+      const o = base(5000, 5300); Object.assign(o, { nonceAt: at(o), tx: cancelAt(o.AT, o.N) });
+      await pastScan('scan-past-4', o, (s, reads) => {
+        ok(s.outcome === 'not-sent' && s.foreign && s.foreign.block === o.AT && FWD.test(s.via) && why.test(s.via), `${what}: ${JSON.stringify(s)}`);
+        let gap = 0; for (let b = o.FROM; b <= o.AT; b++) if (!reads.has(b)) gap++;
+        ok(gap === 0, `${what}: ${gap} blocks skipped`);
+      });
+    }
+  });
   // H step 4's cost basis on real rows (the first live run's fills.json, 2026-10-05, numbers inline): a complex-buy's
   // filled x fill_price is x, its whole net outlay, and its x child Invalid already carries that split into the set
   // term, so x is counted once. Hand: herumi/mcl Cf = x; UP wins filled - x, DOWN wins -x, INVALID x - x = 0.
@@ -1096,7 +1179,8 @@ async function repairSection(root) {
     const c = lib.makeContext({ cfg, sub, runId }); c.holder = () => H0;
     c.helper = async (args) => {
       const [s] = args;
-      if (s === 'block') return { json: args[1] === undefined || args[1] === 'latest' ? { number: 1005 } : { number: Number(args[1]), txs_from: chain.blockTxs.filter((t) => t.block === Number(args[1])) } };
+      if (s === 'block') { if (args[1] === undefined || args[1] === 'latest') return { json: { number: chain.head || 1005 } }; chain.blockReads = (chain.blockReads || 0) + 1; return { json: { number: Number(args[1]), txs_from: chain.blockTxs.filter((t) => t.block === Number(args[1])) } }; }
+      if (s === 'nonce' && args[2] !== undefined && chain.nonceAt) return { json: { address: H0, block: Number(args[2]), nonce: chain.nonceAt(Number(args[2])) } };
       if (s === 'nonce') return { json: { address: H0, latest: chain.latest, pending: chain.pending } };
       if (s === 'receipt') return { json: chain.receipt && chain.receipt.tx_hash === args[1] ? chain.receipt : { found: false, tx_hash: args[1] } };
       throw new Error('unexpected helper call ' + JSON.stringify(args));
@@ -1174,6 +1258,18 @@ async function repairSection(root) {
     const rep = await WK.repair(c, env(c, false), []);
     const ws = JSON.parse(fs.readFileSync(path.join(proj, 'run', R1, 'wake-status.json'), 'utf8'));
     ok(!rep.blockSends && !ex(`run/${R1}/inflight.json`) && ex(`run/${R1}/inflight.settled.json`) && ws.status === 'nothing-to-do' && /repaired by rp-wake-4/.test(ws.notes), JSON.stringify({ rep, ws }));
+  });
+  await test('not-sent, then an operator\'s cancel mined 40,000 blocks later: the next wake\'s repair settles it from the nonce at past blocks, reading one block, and finalizes the run-id', async () => {
+    const s = await sendOnce(false); ok(s && s.cause === 'not-sent', JSON.stringify(s && s.cause));
+    w(`run/${R1}/wake-status.json`, { run_id: R1, status: 'aborted', notes: 'not-sent at nonce 7' });
+    const AT = 1005 + 40000;
+    try {
+      const c = stubCtx('rp-wake-5');
+      Object.assign(chain, { latest: N + 1, pending: N + 1, receipt: null, head: AT + 10, blockReads: 0, nonceAt: (b) => (b >= AT ? N + 1 : N), blockTxs: [{ block: AT, hash: '0x' + 'ee'.repeat(32), nonce: N, to: H0, input_keccak256: '0x' + 'ff'.repeat(32) }] });
+      const rep = await WK.repair(c, env(c, false), []);
+      const ws = JSON.parse(fs.readFileSync(path.join(proj, 'run', R1, 'wake-status.json'), 'utf8'));
+      ok(!rep.blockSends && ex(`run/${R1}/inflight.settled.json`) && ws.status === 'nothing-to-do' && /repaired by rp-wake-5/.test(ws.notes) && chain.blockReads === 1, JSON.stringify({ rep, ws, blockReads: chain.blockReads }));
+    } finally { Object.assign(chain, { head: undefined, nonceAt: undefined, blockReads: 0 }); }
   });
   await test('not-sent on a signer that CAN pin the nonce: settled at once (inflight.json renamed), the stop does not keep the wake aborted', async () => {
     const s = await sendOnce(true);
@@ -1869,6 +1965,29 @@ async function recoverySection(root) {
         const r = P(['wake', R4]);
         const ws3 = rj(rf(R3, 'wake-status.json')); const rec = rj(rf(R3, 'recovery.json')).groups[gid]; const w4 = rj(rf(R4, 'wake-status.json'));
         ok(ws3.status === 'traded' && /repaired by pt-rec-k2 at \S+: recovery: dual-buy:\S+ kept/.test(ws3.notes) && rec.attempts.length === 2 && rec.attempts.every((a) => a.outcome === 'kept') && !rj(rf(R3, 'exec-sends.json')).some((x) => x.source === 'recovery') && /the recovery rule \(G section 8 step 4\): kept/.test(w4.notes), say(r) + clip({ ws3, w4: w4.notes }, 1500));
+      } finally { rmrf(lockDir(W.proj)); }
+    });
+  }
+  {
+    // a complex-buy group numbers its transactions from the whole plan (g-plan.json's idx), not from 0: completing it
+    // after its first approve landed sends the split, the UP approve and the sale, then the pair rebuilt at the realised
+    // proceeds. Read as positions in the group, those numbers left only the pair, which then stopped on "no proceeds".
+    const SEL_SPLIT = iface().getFunction('splitPosition').selector;
+    const probe = wakeLayout(root, 'rec-cb-probe'); const RP = 'pt-rec-cbp';
+    for (const s of ['c', 'd', 'e', 'f', 'g']) { const r = probe.P([s, RP]); if (r.code !== 0) throw new Error(`probe ${s}: ${say(r)}`); }
+    const plan = rj(probe.rf(RP, 'g-plan.json')); const cb = plan.groups.find((x) => x.kind === 'complex-buy');
+    const K = plan.groups.slice(0, plan.groups.indexOf(cb)).reduce((s, x) => s + x.txs.filter((t) => String(t.data).startsWith(SEL_SPLIT)).length, 0);
+    const { W, P, rf } = wakeLayout(root, 'rec-cb'); const R5 = 'pt-rec-cb';
+    await test('recovery, complete, complex-buy numbered from the whole plan: the signer\'s simulate fails its split once, after its approve landed; exec completes it in the same run (split, UP approve, sale, then the pair rebuilt at the realised proceeds): completed, its row naming "recovery", nothing half-done', () => {
+      ok(cb && cb.txs.length === 6 && cb.txs[0].idx > 0, `the probe plan's complex-buy group starts at idx ${cb && cb.txs[0].idx}`);
+      wrapperLock(W.proj, R5);
+      try {
+        const r = P(['wake', R5], { scen: { signerSimFail: { selector: SEL_SPLIT, after: K, times: 1 } } });
+        const ws = rj(rf(R5, 'wake-status.json')); const ex = rj(rf(R5, 'planner/exec.json')).summary; const rec = rj(rf(R5, 'recovery.json')).groups[cb.id];
+        const sends = rj(rf(R5, 'exec-sends.json')).filter((x) => x.source === 'recovery');
+        const row = rj(rf(R5, 'fills.json')).runs.find((x) => x.route === 'complex-buy' && x.status === 'filled' && /^recovery of group complex-buy:/.test(x.error || ''));
+        ok(ex.stop && ex.stop.cause === 'stale-simulation' && !ex.half_done && ex.recovery && ex.recovery.outcome === 'completed' && ex.recovery.decision === 'complete' && rec.outcome === 'completed' && ws.status === 'traded', say(r) + clip({ ws, rv: ex.recovery, rec }, 1500));
+        ok(sends.length === 5 && row && row.filled > 0 && rec.attempts[0].txs.map((t) => t.plan_idx).join() === '1,2,3,4,5', clip({ sends, row, plan_idx: rec.attempts[0].txs.map((t) => t.plan_idx) }, 1500));
       } finally { rmrf(lockDir(W.proj)); }
     });
   }

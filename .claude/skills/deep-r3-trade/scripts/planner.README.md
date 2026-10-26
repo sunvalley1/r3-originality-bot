@@ -423,7 +423,16 @@ All proven or fixed on the first live run; the canonical text is `steps/G-mint-a
   `run/<run-id>/settle-scan.json`, never a field of `nonce-attempts.json` or `inflight.json`, advanced only past blocks
   read whole that hold no transaction of the holder at that nonce and saved as the scan goes. A scan cut short reads
   Pending ("resumes at block B") and the next settlement continues from B, so a cancel mined far past `from_block`
-  is still found and no block is skipped or read twice.
+  is still found and no block is skipped or read twice. **Before the scan,** the block where the nonce was spent is
+  looked up from the holder's nonce at past blocks, the helper's `nonce <address> <block>`: down from the head in
+  doubling steps to the first block whose nonce is not above it (never below the scan's start), then a binary search
+  between the two, a few dozen reads in all; that one block is then read and judged by the same match rule (so a
+  cancel mined ten hours after `from_block` settles in seconds, not hours). Starting from the head keeps it working
+  on an RPC that keeps only recent state, when the nonce was spent recently. The scan runs, as above, only when that
+  lookup finds nothing usable: the nonce at past blocks cannot be read (a pruned RPC answers `state_unavailable`,
+  which is not re-run; a helper without the extension), was already above the nonce before the scan's start, or
+  points at a block without the holder's transaction at that nonce. The scan's answer then says which, after
+  "forward block scan:".
 - **The recovery rule** (G section 8 step 4; `exec.recoverGroup`, its one implementation). `exec` applies it inside the
   wrapper in the run that stopped, after a settled revert, a not-sent finding sending may continue after, or a floor
   breach or stale check before a send (never after a refusal before any broadcast, a Pending or unsettled nonce, a

@@ -18,8 +18,8 @@ This file is `chain-helper.README.md`; the signer's is `signer.README.md`.
 ## What it is, and what it cannot do
 
 - **It reads.** Every request goes through one function that checks a fixed JSON-RPC method list before a socket is
-  opened: `eth_chainId`, `eth_blockNumber`, `eth_getBalance`, `eth_getTransactionCount` (`latest` and `pending`
-  only), `eth_getTransactionReceipt`, `eth_getTransactionByHash`, `eth_getBlockByNumber`, `eth_feeHistory`,
+  opened: `eth_chainId`, `eth_blockNumber`, `eth_getBalance`, `eth_getTransactionCount` (`latest`, `pending`
+  or a hex block number only), `eth_getTransactionReceipt`, `eth_getTransactionByHash`, `eth_getBlockByNumber`, `eth_feeHistory`,
   `eth_gasPrice`, `eth_call`, `eth_getCode`, `eth_getLogs`, `eth_simulateV1`. Nothing named `eth_send*`, `eth_sign*`,
   `personal_*` or `wallet_*` exists in the file. (`eth_getLogs` is on the list because the spec lists it; no
   subcommand uses it today.)
@@ -105,7 +105,7 @@ proxy's implementation slot) and carry through the later entries. `slot` is the 
 | 2 | usage | `usage`, `unknown_subcommand`, `unexpected_option`, `bad_argument`, `file_not_hex` |
 | 3 | config | `config_missing`, `config_malformed`, `config_inside_project`, `ethers_version` |
 | 4 | path refused | `bad_run_id`, `run_dir_missing`, and every `path_*` code below |
-| 5 | network / RPC | `rpc_unreachable`, `rpc_http`, `rpc_rate_limited`, `rpc_malformed`, `rpc_error`, `chain_mismatch`, `block_not_found`, `response_too_large`, `data_unreachable`, `data_rate_limited`, `data_redirect`, `simulate_unsupported`, `simulate_failed`, `simulate_malformed` |
+| 5 | network / RPC | `rpc_unreachable`, `rpc_http`, `rpc_rate_limited`, `rpc_malformed`, `rpc_error`, `state_unavailable`, `chain_mismatch`, `block_not_found`, `response_too_large`, `data_unreachable`, `data_rate_limited`, `data_redirect`, `simulate_unsupported`, `simulate_failed`, `simulate_malformed` |
 | 6 | method refused | `forbidden_method` |
 | 7 | output too large | `output_too_large` |
 | 8 | reverted | `call_reverted` (carries `revert_reason` and `revert_data` when the node returned them) |
@@ -140,7 +140,7 @@ apart, and for the three known ones a `hint`: `-38026` (too many blocks: more th
 
 ## Subcommands
 
-`block <n> <address>`, `code`, `data-rows` and `multicall` are marked **extension**: they are not in the spec's list.
+`block <n> <address>`, `nonce <address> <block>`, `code`, `data-rows` and `multicall` are marked **extension**: they are not in the spec's list.
 Everything else is the spec's list. An extension adds no write path, no method and no network target.
 
 ### `chain-id`
@@ -156,8 +156,13 @@ With `<address>` (extension) the block is read with full transactions and adds `
 `input`. That is how a mined transaction from the signer at nonce `n` is found and matched by input hash without ever
 holding the input.
 
-### `nonce <address>`
+### `nonce <address> [<block>]`
 `{"address":"0x..","latest":0,"pending":0}`.
+
+With `<block>` (extension; a decimal or `0x` number), the nonce at the end of that past block alone, one
+`eth_getTransactionCount` at it: `{"address":"0x..","block":158670597,"nonce":1375}`. An RPC that keeps no state for
+that block (a pruned node: "missing trie node" and the like) answers `state_unavailable` (exit 5), which the planner does not re-run. A settlement uses it to find the one block where a nonce was spent
+(`planner.README.md` section 6, *Write-ahead and settlement*).
 
 ### `balance <address>`
 `{"address":"0x..","wei":"0","eth":"0.0"}`.
