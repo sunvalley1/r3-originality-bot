@@ -8,7 +8,10 @@
 //   node .claude/skills/deep-r3-trade/scripts/routine.cjs install [--ethers-from <node_modules folder>]
 //       the planner, the chain helper and the signer, outside the project (routine.config.json says where), with
 //       ethers 6.17.0 and their configs; the signer's keystore and password from the environment variables
-//       R3_KEYSTORE_JSON and R3_KEYSTORE_PASSWORD when both are set (written 0600 outside the project, never printed)
+//       R3_KEYSTORE_JSON and R3_KEYSTORE_PASSWORD when both are set (written 0600 outside the project, never printed).
+//       A first install, with no allowlist in the project yet, lays the tools down and stops (exit 4): its "next"
+//       names the installed signer's allowlist-init, whose file goes into the project before install runs again
+//       (SETUP.md step 3)
 //   node ... routine.cjs trade [--push]
 //       one scheduled run: the lock, the planner and signer pins of run/setup.deep-r3-trade.json (the paths must be this
 //       install's), `planner wake` once, the final status; --push commits and pushes the run records while the run
@@ -137,10 +140,12 @@ function install(c, opts) {
   for (const f of fs.readdirSync(path.join(SCRIPTS, 'planner')).filter((n) => n.endsWith('.cjs'))) writeFile(path.join(P.plannerDir, 'planner', f), fs.readFileSync(path.join(SCRIPTS, 'planner', f)));
   writeFile(P.helper, fs.readFileSync(path.join(SCRIPTS, 'chain-helper.cjs')));
   writeFile(P.signer, fs.readFileSync(path.join(SCRIPTS, 'signer.cjs')));
+  // no allowlist in the project yet (a first install): the signer that builds it is laid down with its ethers and its
+  // config below, then install stops, naming the command; the key files are not written until the allowlist is in place
   const allowSrc = path.join(ROOT, c.allowlistFile);
-  if (!fs.existsSync(allowSrc)) throw new Exit(4, `the allowlist ${c.allowlistFile} is not in the project (routine.config.json allowlistFile)`);
-  if (sha256File(allowSrc) !== c.allowlistSha256) throw new Exit(4, `${c.allowlistFile} does not hash to routine.config.json's allowlistSha256`);
-  writeFile(P.allowlist, fs.readFileSync(allowSrc));
+  const allowMissing = !fs.existsSync(allowSrc);
+  if (!allowMissing && sha256File(allowSrc) !== c.allowlistSha256) throw new Exit(4, `${c.allowlistFile} does not hash to routine.config.json's allowlistSha256`);
+  if (!allowMissing) writeFile(P.allowlist, fs.readFileSync(allowSrc));
   const ethers = { tools: ethersIn(c.toolsDir, opts.ethersFrom), signer: ethersIn(c.signerDir, opts.ethersFrom) };
 
   // the three configs: the planner's next to planner.cjs, the helper's next to the helper, the signer's next to it.
@@ -156,6 +161,11 @@ function install(c, opts) {
     keystorePath: P.keystore, signerMode: 'password-file', unlockPath: P.password,
     allowlistPath: P.allowlist, allowlistSha256: c.allowlistSha256, sendLockPath: P.sendLock, logPath: P.signerLog,
   }, null, 1) + '\n');
+  if (allowMissing) {
+    throw new Exit(4, `the allowlist ${c.allowlistFile} is not in the project yet. The signer is installed: build the allowlist with it (operator-run, steps/I-setup.md I.1 section 7) as "next" says, copy the file it writes to ${c.allowlistFile} byte for byte, set routine.config.json's allowlistSha256 to the sha256 it prints, and run install again`, {
+      next: { allowlist_init: `node "${P.signer}" allowlist-init --skill-dir "${path.join(ROOT, '.claude', 'skills', 'deep-r3-trade')}"`, writes: P.allowlist, copy_to: c.allowlistFile, note: 'add --force if allowlist-init says the file already exists' },
+    });
+  }
 
   // the key material: from the environment, written 0600 outside the project, never printed or logged
   let keys;

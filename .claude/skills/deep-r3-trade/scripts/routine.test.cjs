@@ -317,6 +317,19 @@ async function installSection(W) {
     ok(!(r.stdout + r.stderr).includes(KEY_PASSWORD), 'the password was printed');
     ok(r.j.ethers.tools === 'present' && r.j.ethers.signer === 'present', clip(r.j.ethers));
   });
+  await test('install, a first install with no allowlist in the project yet: the signer, its ethers and its config are laid down, no allowlist and no key files; exit 4 names allowlist-init on the installed signer', async () => {
+    const Q = makeProject(W, 'install-noallow');
+    fs.rmSync(path.join(Q.proj, 'setup', 'r3-allowlist.json'));
+    const r = await r3(W, Q, ['install'], { env: KEYS_ENV });
+    const err = String(r.j && r.j.error); const nx = (r.j && r.j.next) || {}; const lo = (s) => (isWin ? String(s).toLowerCase() : String(s));
+    ok(r.code === 4 && err.includes('is not in the project yet') && err.includes('run install again'), say(r));
+    ok(lo(nx.allowlist_init).startsWith(lo(`node "${Q.signerBin}" allowlist-init --skill-dir "`)) && norm(nx.writes) === norm(path.join(Q.signerDir, 'r3-allowlist.json')) && nx.copy_to === 'setup/r3-allowlist.json', clip(nx));
+    ok(shaFile(Q.signerBin) === shaFile(path.join(SCRIPTS, 'signer.cjs')) && exists(path.join(Q.signerDir, 'node_modules', 'ethers', 'package.json')), 'the signer or its ethers is missing');
+    const sc = rj(path.join(Q.signerDir, 'signer.config.json'));
+    ok(sc.signerMode === 'password-file' && norm(sc.allowlistPath) === norm(path.join(Q.signerDir, 'r3-allowlist.json')) && norm(sc.projectRoot) === norm(Q.proj), clip(sc));
+    ok(!exists(path.join(Q.signerDir, 'r3-allowlist.json')) && !exists(path.join(Q.keys, 'keystore.json')) && !exists(path.join(Q.keys, 'password')), 'an allowlist or a key file was written');
+    ok(!(r.stdout + r.stderr).includes(KEY_PASSWORD), 'the password was printed');
+  });
 }
 
 // =================================================================================================================
