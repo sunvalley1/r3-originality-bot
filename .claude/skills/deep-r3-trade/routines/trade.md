@@ -75,6 +75,32 @@ whether each was pushed; and the planner's and signer's paths and sha256 that `i
 records. A clearance that stopped at D (`no-csv`, `csv-store-mismatch`), found an empty plan (`empty_plan: true`) or
 whose `exec --check` did not return `check-passed` has not passed: say so, and do not run it again.
 
+## A Codex scheduled task on your own computer
+
+When your prompt says you are a Codex scheduled task, you are not a Claude Code routine: you run on the operator's own
+computer, in the ChatGPT desktop app in Codex mode, in their trading clone (`../steps/I-setup.md` I.2 §7, *A Codex
+scheduled task, on your own computer*). Everything above holds, with these differences:
+
+- **The pin check** is your prompt's `node -e` command: the same tree fingerprint, computed by node from
+  `git ls-tree` and writing nothing, so it runs the same in PowerShell, bash and zsh and inside Codex's sandbox. It
+  also checks that nothing tracked outside `run/` differs from HEAD: this clone is the operator's working folder, and
+  `install` and this file are read from the working tree. Exit 1 with `uncommitted changes outside run/` means exactly
+  that. Run it first, exactly as written, and stop on any exit but 0. Your session starts in the trading clone: run
+  no `cd`.
+- **The key** is in this computer's key files (`keysDir` of `routine.config.json`), not in environment variables. In
+  step 1, `keys` must read `present`; stop and report on anything else. `pins` must be `match` for both, as above.
+- **Step 2 is `node r3.cjs trade`, without `--push`.** The records stay in this clone, the one copy the task runs from;
+  the operator pushes `run/` when they want a copy on GitHub. Run it in the foreground with your shell tool's timeout
+  (`timeout_ms`) set to `21600000`, the 6 hours of `schedule.time_limit_hours`, never left at its default: the
+  default is short, and when it runs out it kills the run. If the tool yields while the command still runs, keep
+  waiting on that same process until it ends; never start a second one.
+- **Your commands** are the pin check, `node r3.cjs install`, `node r3.cjs trade` and `node r3.cjs status`, and you
+  may read files. A Codex task has no tool lists: what bounds you is your prompt, this file, the Codex permissions the
+  operator set and the Codex rules that make `node r3.cjs planner` ask (a scheduled task never asks, so that spelling
+  is refused; another spelling may match no rule: one layer, not a wall). Never run `node r3.cjs planner`, the
+  installed planner or signer by their own paths, `git`, `npm` or any other command, and never edit a file. `r3.cjs`'s refusal of the planner's send entry points is keyed on the key's
+  environment variables, which this computer does not set, so it does not apply here.
+
 ## Your reply
 
 A short report: the run-id; the status (`traded`, `nothing-to-do`, `no-csv`, `csv-store-mismatch`, `aborted`); what

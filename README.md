@@ -146,8 +146,8 @@ the pin (*Running and checking it*).
 SETUP.md": it checks where you are and guides you, doing the commands while you do everything that touches your key,
 your money or a website login. In short:
 
-0. What you need: Git, Node.js 22, Foundry's `cast`, a Claude plan with routines, a new wallet funded on Optimism,
-   your CSV.
+0. What you need: Git, Node.js 22, Foundry's `cast`, a scheduler (a Claude plan with routines and Claude Code, or a
+   ChatGPT plan with Codex scheduled tasks), a new wallet funded on Optimism, your CSV.
 1. A **private copy** of this repository, the *trading* repository, with the Claude GitHub app given access.
 2. Deny rules for the key folders, then the **bot wallet** as an encrypted keystore with a text password
    (`cast wallet new ~/.foundry/keystores r3-bot` or `cast wallet import r3-bot --interactive`), funded on Optimism.
@@ -162,6 +162,10 @@ your money or a website login. In short:
    tool lists are set, then its **setup run**: a Run now of it with a setup prompt and two extra tools.
 8. Record the setup run in the setup record, give the routine back its trading prompt and tools, answer the second
    question, turn the routine on.
+
+   With Codex instead of steps 6 to 8: a Codex scheduled task on your own computer (it must be on, with the ChatGPT
+   app open, at run times), its permissions, a no-send clearance on that computer, the second question, and one run by
+   hand (SETUP.md, "6 to 8 with Codex instead").
 9. Check the first scheduled run.
 
 SETUP.md also has a troubleshooting table and what another cloud (Codex, GitHub Actions) must provide.
@@ -180,7 +184,8 @@ the self-test, I.2 §7 for the repository, the routine and the setup run.
   changed signer also needs the self-test's pass and the second question again (`steps/I-setup.md` I.2 §1). Commit
   `run/`, then put the new commit's tree fingerprint in the trading routine's prompt and in its pin-check tool entry
   (with `/schedule update` in Claude Code: the claude.ai form changes the prompt, not the tool lists). Until you do,
-  the trading run stops at its pin check.
+  the trading run stops at its pin check. With a Codex scheduled task, there is no setup run: SETUP.md, *Afterwards,
+  with Codex*.
 - **Update from an install made before 25 Oct 2026:** delete `forecastImport`, `planner.forecastMethod` and
   `planner.forecastMaxAgeHours` from your `routine.config.json`. The forecast-file method and its research routine
   were removed from the base skill; `install`, `trade` and `clearance` refuse a config that still holds those keys and
@@ -188,8 +193,11 @@ the self-test, I.2 §7 for the repository, the routine and the setup run.
 - **Pause:** turn the routine off in claude.ai, or set `autonomy.enabled` to false in `run/setup.deep-r3-trade.json`
   and push it. Neither stops a run already in progress. Removing the two key variables from the trading environment
   stops new runs from getting the key. It does not reach a past run: its VM pauses with its files saved, the key files
-  `install` wrote among them, and continuing its session restores it. Never continue a trading run's session.
-- **A supervised send from your own machine:** pause the trading routine first and make sure no run is live.
+  `install` wrote among them, and continuing its session restores it. Never continue a trading run's session. With a
+  Codex scheduled task: pause it in the app, and set the field in the clone on that computer; a push does not reach
+  it, because it never pulls.
+- **A supervised send from your own machine:** pause the trading routine (or the Codex task) first and make sure no
+  run is live.
   `r3.cjs`'s lock lives in one clone, so it does not stop a cloud run and a local session from sending at once. For
   the same reason, never Run now while a scheduled run is live.
 - **Status of the book** (read-only): `node tools/r3-status.cjs run/<run-id> <from-block>`.

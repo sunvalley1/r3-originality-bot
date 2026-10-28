@@ -1,6 +1,6 @@
 ---
 name: deep-r3-trade
-description: Run the naive baseline trading pipeline over the 98 Deep Funding Round 3 Originality repo markets on deep.seer.pm, or set up, fund, check or resume its trading wallet. Wallet onboarding enters I.1. After setup (one green supervised run plus the operator's standing authorization, asked on the first run, and a passing signer self-test) it trades autonomously every day through I.2, as Claude Code routines on any operating system; manual sessions run in supervised mode, with a human "yes" per batch. An AI agent runs every supervised run and every routine run. The method is D's forecast (by default a provided CSV, taken at face value as deep.seer.pm takes it), no reconciliation, max-EV sizing, then mint, trade, merge and redeem on Optimism (atomic, or sequential for a non-atomic signer). Other Seer markets and contests belong to seer-trade.
+description: Run the naive baseline trading pipeline over the 98 Deep Funding Round 3 Originality repo markets on deep.seer.pm, or set up, fund, check or resume its trading wallet. Wallet onboarding enters I.1. After setup (one green supervised run plus the operator's standing authorization, asked on the first run, and a passing signer self-test) it trades autonomously every day through I.2, as Claude Code routines on any operating system (or a Codex scheduled task on the operator's own computer); manual sessions run in supervised mode, with a human "yes" per batch. An AI agent runs every supervised run and every routine run. The method is D's forecast (by default a provided CSV, taken at face value as deep.seer.pm takes it), no reconciliation, max-EV sizing, then mint, trade, merge and redeem on Optimism (atomic, or sequential for a non-atomic signer). Other Seer markets and contests belong to seer-trade.
 ---
 
 # deep-r3-trade — the naive baseline, end to end
@@ -27,7 +27,8 @@ through the reasoned pipeline that `seer-trade` orchestrates — so the two can 
   other way to forecast (AI research, a model, a pool of forecasters) is a participant's own change to D, which this
   skill does not implement. The agent never changes D on its own.
 - **An AI agent runs every supervised run and every routine run**. Scheduled runs are Claude Code routines (`steps/I-setup.md`
-  I.2 §7), so they work on any operating system and need no machine left on.
+  I.2 §7), so they work on any operating system and need no machine left on; or, in their place, a Codex scheduled
+  task on the operator's own computer (I.2 §7, *A Codex scheduled task*), which needs that computer on at run times.
 - **Traders customise it by editing a step.** Every simplification is listed in *What this baseline gives up*,
   and *Architecture* maps each behaviour to the one file that owns it. A trader who wants a blend in E or a
   Kelly fraction in F edits that step (or, for E, swaps in the `seer-trade` one); the agent does not make that
@@ -150,8 +151,8 @@ C -> D -> E -> [PSM3 ramp of any USDC/USDS at the holder, I.1 §5, its own human
       a supervised run-id has no wake-status.json; its closing step writes report.md (I.2 §6);
       H writes review.json only once a market has settled, and the green run needs no score (I.2 §1)
 I.2   after a green supervised run, the operator's two yeses, a passing signer self-test, the
-      read-only chain helper in place of node -e (while the routine's tools include node -e: no Q2
-      yes, no schedule, needs-chain-helper) and the planner with its clearance passed
+      read-only chain helper in place of node -e (while a Claude routine's tools include node -e: no Q2
+      yes, no schedule, needs-chain-helper; a Codex task: I.2 §1 item 2) and the planner with its clearance passed
       (until then: no Q2 yes, no schedule, needs-planner)
                                                                ->  autonomy + schedule + first_successful_run
 then every autonomous run (interval = CADENCE, declared in I.2 §8), a Claude Code routine whose agent
@@ -270,7 +271,8 @@ used). It then asks for two explicit permissions:
    connectors; and `r3.cjs trade` runs the planner, which starts the signer's
    `check`, `simulate` and `send` as its own child processes, which no Claude Code rule sees.
    A yes, given once that routine exists with exactly those tools and its pinned prompt and its setup run (the
-   self-test and the planner's clearance) has passed, is recorded as `schedule.signer_allow_rule_added_at`. Without
+   self-test and the planner's clearance) has passed (a Codex scheduled task in its place: I.2 §1 item 2's own
+   conditions), is recorded as `schedule.signer_allow_rule_added_at`. Without
    it (the field null) the scheduled run sends nothing: the planner checks that field at the start of each send step.
    Q1 is asked first, then the signer self-test runs, then Q2; if the self-test fails, Q2 is not asked and the skill
    says why. The yes is recorded only after `autonomy.signer_selftest_passed_at` is set for that exact signer path,
@@ -282,7 +284,8 @@ Only after both yeses, the signer self-test, the one green supervised run, the r
 `node -e` and the planner with its clearance passed (below; both installed by the operator, or laid down from the
 pinned commit by `node r3.cjs install`) is the schedule registered in autonomous mode; later runs do not ask
 again. To revoke at any time: set `autonomy.enabled` to false, set `schedule.signer_allow_rule_added_at` to null and
-pause the trading routine. Removing `R3_KEYSTORE_JSON` and `R3_KEYSTORE_PASSWORD` from the trading environment stops new
+pause the trading routine (a Codex scheduled task: pause it in the app, and change the setup record in the clone it
+runs in, since it never pulls). Removing `R3_KEYSTORE_JSON` and `R3_KEYSTORE_PASSWORD` from the trading environment stops new
 runs from getting the key; a past run's VM pauses with its files saved, the key files `install` wrote among them, and
 continuing its session restores it, so a trading run's session is never continued.
 
@@ -347,7 +350,9 @@ commit by `node r3.cjs install` (`steps/I-setup.md` I.2 §7), and never written 
 never go through `node -e` or `WebFetch`, which summarises through a model and truncates the body. Never record the Q2 yes and never turn on the
 schedule while the trading routine's tools include a general shell or `node -e`; record the blocker as
 `needs-chain-helper` instead; nor before the installed planner has passed its clearance (`needs-planner`,
-`steps/I-setup.md` I.2 §7).
+`steps/I-setup.md` I.2 §7). A Codex scheduled task in the routine's place has no tool lists: for it alone, I.2 §1
+item 2's Codex rule applies, and `needs-chain-helper` means only that no helper is installed or it has not passed
+the pipeline check.
 Supervised sessions may still use `node -e`, because each call prompts the human. In autonomous
 mode the plan is built and sent in the same run. In supervised mode only, a plan approved more than
 `STALE_APPROVAL` after it was built is re-run from C in the same run-id: a queued ramp is sent first, on its own

@@ -1,8 +1,9 @@
 # Instructions for AI agents working in this repository
 
-**A scheduled run reads no further.** If your prompt has you run the code pin check
-(`test "$(git ls-tree HEAD | ...`) as your first command, or says this is a setup run, you are the trading routine or
-its setup run: run nothing this file asks for, not even the checks below; follow your prompt and
+**A scheduled run reads no further.** If your prompt has you run the code pin check as your first command
+(`test "$(git ls-tree HEAD | ...`, or a `node -e` command over `git ls-tree`), or says this is a setup run or that you
+are a Codex scheduled task, you are the trading routine, its setup run or the Codex scheduled task in its place: run
+nothing this file asks for, not even the checks below; follow your prompt and
 `.claude/skills/deep-r3-trade/routines/trade.md` only, and treat this file as data.
 
 Everyone else: this repository is the R3 Originality trading bot, a skill in `.claude/skills/deep-r3-trade/`
@@ -25,13 +26,14 @@ short list what is done and what is next:
 4. `run/csv/current.json` exists (a CSV has been supplied).
 5. `run/setup.deep-r3-trade.json`, after a `git pull`: `first_successful_run`, `autonomy.authorized_at` and
    `autonomy.signer_selftest_passed_at` (step 4); then step 8 is done only when `schedule.signer_allow_rule_added_at`
-   is set and `autonomy.signer_path` and `autonomy.planner_path` are the cloud install's paths (`/root/...` on
-   Claude's routines), equal to
-   `installed.signer` and `installed.planner` in the setup run's `run/<run-id>/clearance.json`. Until then every
-   scheduled run stops at its start: do not let them switch the routine on.
+   is set and `autonomy.signer_path` and `autonomy.planner_path` equal `installed.signer` and `installed.planner` in
+   the clearance that cleared the scheduler: the cloud setup run's (`/root/...` paths) for a Claude routine, or a
+   supervised `node r3.cjs clearance` on this computer for a Codex scheduled task (SETUP.md C1 and C2). Until then
+   every scheduled run stops at its start: do not let them switch the schedule on.
 6. What you cannot see (the cloud environment, the routine, the wallet's funding): ask.
-7. If you are not Claude Code: tell them now that step 7 needs Claude Code (CLI or desktop app) signed in with their
-   Claude plan, because only its `/schedule` gives a routine its allowed and denied tools.
+7. Which scheduler they will use: a Claude routine in the cloud (SETUP.md steps 6 to 8; it needs Claude Code's
+   `/schedule`, the only way to give a routine its allowed and denied tools), or a Codex scheduled task on their own
+   computer, which must then be on with the ChatGPT app open at run times (SETUP.md "6 to 8 with Codex instead").
 
 If anything is left, offer to walk them through [SETUP.md](SETUP.md) from that step, one step at a time: say what the
 step is for, what they will do and what you will do, wait for them to finish it, check it with the step's own check,
@@ -56,11 +58,13 @@ and only then go on. If they decline, do what they asked.
   the batch comes first (`SKILL.md`). `allowlist-init` is never yours to run, even with their approval: the person
   runs it in their own terminal (SETUP.md step 3; `scripts/signer.README.md`).
 - Never start a scheduled trading run by hand while another run may be live: one sender per wallet. Pause the
-  routine before any supervised send from this computer.
+  routine (or the Codex scheduled task) before any supervised send from this computer.
 - Push only what the person asked for. Never push `run/` or `inputs/` to the public repository.
 - Use Node.js 22. On Windows, Node 24 crashes the bot's tools.
 - If you are not Claude Code: run the skill by reading `.claude/skills/deep-r3-trade/SKILL.md` in full and following
   it; the skills it names are the folders beside it in `.claude/skills/`. For a supervised session's
   `run/<run-id>/session-owner.json` (`steps/I-setup.md` I.2 §6), the long-lived process is your own agent's: if the
-  snippet stops with `no claude ancestor`, add your agent's process name to its match (for example `codex`).
+  snippet stops with `no claude ancestor`, add your agent's process name to its match (for example `codex`). In the
+  Codex app, delete that marker yourself when the run's sends are done: it names the app's own process, which outlives
+  the chat, so a scheduled task would treat that run-id as live and skip its repair, merges, redeems and scoring.
 - `SKILL.md` and `steps/` are the authority when this file, SETUP.md or the README disagree with them.
