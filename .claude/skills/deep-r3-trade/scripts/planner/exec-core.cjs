@@ -380,6 +380,66 @@ async function settleNonce(env, book, n, o = {}) {
 }
 
 // ---------------------------------------------------------------------------------------------------------------
+// A stuck nonce, cleared by the scheduled run itself (G section 8, Nonce pinning). Inside the wrapper only (a supervised
+// session leaves both to the person), the planner starts two of the signer's supervised entry points; neither moves
+// funds or takes a destination:
+//  - clear-nonce <n> (cancelStuckNonce): a not-sent finding at latest == pending == n on a signer that cannot pin the
+//    nonce, with no foreign transaction at n, never clears by itself, because the old signed transaction could still
+//    land. The cancel is a zero-value transaction to the owner pinned in the signer's config, signed at exactly n with a
+//    doubled fee. Exactly one transaction can land at n, so the old one never lands after it; n is then settled again
+//    from chain state (a mined cancel is a foreign transaction, step 4; an old transaction that landed first settles as
+//    Landed). Each call is recorded in that run-id's nonce-cancels.json before it is made.
+//  - reconcile (releaseSendLock): once a nonce is settled, the signer's own rule releases the send-lock an unclear send
+//    left (landed, reverted, or superseded: its hash can never land), so the run's later sends are not refused for it.
+//    A lock whose transaction is not settled stays.
+// ---------------------------------------------------------------------------------------------------------------
+const STUCK_RECHECK_MS = 60 * 1000; // a finding on the run's own send is read again after this wait, before any cancel
+const CANCEL_TRIES = 2; // clear-nonce calls per finding, the second after CANCEL_RETRY_MS and a fresh settlement
+const CANCEL_RETRY_MS = 20 * 1000;
+const CANCEL_ROOM_MS = 5 * 60 * 1000; // no cancel is started with less than this left before the deadline
+function selfClears(env) { return !!env.lock && env.lock.mode === 'wrapper' && !env.signerModeProblem; }
+const stuckNotSent = (s) => s.outcome === 'not-sent' && !s.foreign;
+async function releaseSendLock(env) {
+  let r;
+  try { r = await env.ctx.signer('reconcile', null, [], { env: env.signerEnv || undefined, retries: HELPER_RETRIES }); } catch (e) { return { status: 'error', released: false, note: `the signer's reconcile failed (${clip((e && e.message) || e, 160)})` }; }
+  const j = r.last || {};
+  const status = typeof j.status === 'string' ? j.status : 'error';
+  const released = j.lock_released === true;
+  return { status, released, note: status === 'no-lock' ? null : `the signer's reconcile: ${status}${Number.isInteger(j.nonce) ? ` (nonce ${j.nonce})` : ''}${released ? ', its send-lock released' : ''}${status === 'error' ? ` (${clip(JSON.stringify(j), 160)})` : ''}` };
+}
+async function cancelStuckNonce(env, book, n, { trigger, recheckMs = 0 } = {}) {
+  const now = env.now || Date.now; const nap = env.sleep || lib.sleep;
+  const cancels = []; let why = null;
+  if (recheckMs > 0) await nap(recheckMs);
+  let s = await settleNonce(env, book, n);
+  for (let k = 0; k < CANCEL_TRIES && stuckNotSent(s) && !env.pin; k++) {
+    if (k > 0) { await nap(CANCEL_RETRY_MS); s = await settleNonce(env, book, n); if (!stuckNotSent(s)) break; }
+    if (env.deadlineMs && env.deadlineMs - now() < CANCEL_ROOM_MS) { why = 'too little time is left before the deadline'; break; }
+    if (!lockStillOurs(env)) { why = `run/${lib.LOCK_NAME} is no longer this run's`; break; }
+    const list = book.readJson('nonce-cancels.json', []);
+    const rec = { at: lib.nowIso(), nonce: n, by: env.ctx.runId, trigger, status: 'started' };
+    list.push(rec); book.writeJson('nonce-cancels.json', list);
+    env.ctx.log(`CANCEL nonce ${n} (${trigger}): the signer's clear-nonce, a zero-value transaction to the owner at exactly nonce ${n}`);
+    let r = null; let err = null;
+    try { r = await env.ctx.signer('clear-nonce', String(n), [], { env: env.signerEnv || undefined, retries: HELPER_RETRIES }); } catch (e) { err = clip((e && e.message) || e, 200); }
+    const lines = (r && r.lines) || [];
+    const bc = lines.find((j) => j.event === 'broadcast') || null;
+    const conf = bc ? lines.find((j) => j.event === 'confirmed' && j.hash === bc.hash) || null : null;
+    Object.assign(rec, { status: conf ? 'confirmed' : bc ? 'unconfirmed' : 'refused', hash: bc ? bc.hash : null, block: conf ? conf.block_number : null, signer_exit: r ? r.exit : null, detail: conf ? null : err || clip(JSON.stringify((r && r.last) || {}), 300) });
+    book.writeJson('nonce-cancels.json', list); cancels.push(rec);
+    s = await settleNonce(env, book, n);
+    // a mined cancel that the next reads do not show yet (latest still n): read again, a few times
+    for (let j = 0; j < 3 && conf && stuckNotSent(s); j++) { await nap(5000); s = await settleNonce(env, book, n); }
+  }
+  const c = cancels[cancels.length - 1];
+  const after = s.outcome === 'not-sent' && s.foreign ? `settled Not sent: ${s.foreign.hash} consumed it` : s.outcome === 'landed' ? `settled Landed: its own transaction ${s.hash} landed first` : `reads ${s.outcome} (${s.via})`;
+  const note = c
+    ? `nonce ${n}: the run's own cancel (the signer's clear-nonce, a zero-value transaction to the owner; ${cancels.length} call${cancels.length > 1 ? 's' : ''}, recorded in ${book.rel('nonce-cancels.json')}): ${c.status}${c.hash ? ` ${c.hash}` : ''}${c.detail ? ` (${clip(c.detail, 160)})` : ''}; nonce ${n} ${after}`
+    : `nonce ${n}: no cancel sent${why ? ` (${why})` : ''}; nonce ${n} ${after}`;
+  return { settlement: s, cancels, note };
+}
+
+// ---------------------------------------------------------------------------------------------------------------
 // One transaction: write-ahead, ONE signer send, then confirmation (or settlement). Returns { hash, receipt }.
 // Throws a Stop carrying fields: pre_broadcast_refusal, send_lock_held, keep_aborted, settlement.
 // ---------------------------------------------------------------------------------------------------------------
@@ -428,16 +488,29 @@ async function broadcast(env, book, tx, n, hash, meta = {}) {
 }
 
 // A settled outcome of an unclear send: Landed with status 1 continues (G section 8 step 4); everything else stops.
+// Inside the wrapper, a not-sent finding on a signer that cannot pin the nonce is first consumed by the run's own
+// cancel, and a nonce settled for good gets the send-lock its unclear send left released (both above).
 async function afterUnclear(env, book, tx, n, s, why, meta = {}) {
+  if (selfClears(env)) {
+    if (stuckNotSent(s) && !env.pin) {
+      // read again a minute later first, so that a broadcast still on its way shows before any cancel
+      const c = await cancelStuckNonce(env, book, n, { trigger: `the unclear send of ${tx.label}`, recheckMs: STUCK_RECHECK_MS });
+      s = c.settlement; why = `${why}; ${c.note}`;
+    }
+    if (s.outcome === 'landed' || (s.outcome === 'not-sent' && s.foreign)) {
+      const rl = await releaseSendLock(env);
+      if (rl.note) { env.ctx.log(rl.note); why = `${why}; ${rl.note}`; }
+    }
+  }
   const settlement = { outcome: s.outcome, via: s.via, hash: s.hash || null, latest: s.latest, pending: s.pending, foreign: s.foreign || null };
   env.ctx.log(`settlement of nonce ${n}: ${JSON.stringify(settlement)}`);
   if (s.outcome === 'landed' && s.receipt && s.receipt.success === true) return confirm(env, book, tx, n, s.hash, meta, settlement);
   if (s.outcome === 'landed') { book.settleInflight(); env.open = null; throw xstop(env.step, 'reverted', `${why}; settled: the transaction landed and reverted (${s.hash})`, { settlement, landed_reverted: s.hash }); }
   if (s.outcome === 'not-sent') {
-    // a signer that cannot pin the nonce sends no replacement after a not-sent finding (G section 8, Nonce pinning): the
-    // finding is not a settlement then, so inflight.json stays and the run-id stays non-final; every later run's
-    // start-of-run repair re-settles nonce n until the old transaction lands or a foreign one (an operator's cancel)
-    // consumes n (I-setup.md I.2 section 6)
+    // a signer that cannot pin the nonce sends no replacement after a not-sent finding (G section 8, Nonce pinning): with
+    // no foreign transaction at n (the run's own cancel did not consume it, or this is a supervised session) the finding
+    // is not a settlement, so inflight.json stays and the run-id stays non-final; every later run's start-of-run repair
+    // re-settles nonce n, and sends its own cancel, until a transaction consumes n (I-setup.md I.2 section 6)
     if (env.pin || s.foreign) book.settleInflight();
     env.open = null;
     throw xstop(env.step, 'not-sent', `${why}; settled Not sent (${s.via})${s.foreign ? `; foreign transaction ${s.foreign.hash} input_keccak256 ${s.foreign.input_keccak256} at nonce ${n}` : ''}`, { settlement, keep_aborted: !env.pin && !s.foreign, foreign: s.foreign || null });
@@ -464,15 +537,15 @@ async function confirm(env, book, tx, n, hash, meta = {}, settlement = null) {
   return { hash, receipt: rc, record: rec };
 }
 
-// The standing authorization (I-setup.md I.2 section 1, G section 8 Two modes): an autonomous send needs all five set
-// in the setup record (first_successful_run, autonomy.enabled true with autonomy.authorized_at,
-// autonomy.signer_selftest_passed_at, schedule.signer_allow_rule_added_at). Checked by `wake` at its start and again by
-// every wrapper-mode send path (exec, halfb, the wake's ramp), so a revocation (autonomy.enabled false) stops sends even
-// when a step is driven alone.
+// The standing authorization (I-setup.md I.2 section 1, G section 8 Two modes): an autonomous send needs all four set
+// in the setup record (autonomy.enabled true with autonomy.authorized_at, autonomy.signer_selftest_passed_at,
+// schedule.signer_allow_rule_added_at). Checked by `wake` at its start and again by every wrapper-mode send path (exec,
+// halfb, the wake's ramp), so a revocation (autonomy.enabled false) stops sends even when a step is driven alone. A
+// supervised first run is no longer one of them (28 Oct 2026): the setup run's clearance checks the whole plan without
+// sending, and first_successful_run, which older setup records hold, is not read.
 function gateProblems(setup) {
   if (!setup) return ['run/setup.deep-r3-trade.json does not exist'];
   const p = [];
-  if (!setup.first_successful_run) p.push('first_successful_run is null');
   if (!setup.autonomy || setup.autonomy.enabled !== true) p.push('autonomy.enabled is not true');
   if (!setup.autonomy || !setup.autonomy.authorized_at) p.push('autonomy.authorized_at is null');
   if (!setup.autonomy || !setup.autonomy.signer_selftest_passed_at) p.push('autonomy.signer_selftest_passed_at is null');
@@ -499,4 +572,5 @@ module.exports = {
   REFUSED_SIGNER_MODE, SIGNER_MODE_NOTE, signerModeProblem, signerModeStop, refuseSignerMode,
   lockMode, lockHeldStop, takeLock, releaseLock, lockStillOurs,
   affordability, gasCheck, checkInputFile, presend, settleNonce, broadcast, groupFits, clockAdd, gateProblems,
+  STUCK_RECHECK_MS, CANCEL_ROOM_MS, selfClears, releaseSendLock, cancelStuckNonce,
 };

@@ -13,9 +13,10 @@
 //       names the installed signer's allowlist-init, whose file goes into the project before install runs again
 //       (SETUP.md step 3)
 //   node ... routine.cjs trade [--push]
-//       one scheduled run: the lock, the planner and signer pins of run/setup.deep-r3-trade.json (the paths must be this
-//       install's), `planner wake` once, the final status; --push commits and pushes the run records while the run
-//       lasts and at its end
+//       one scheduled run, or a trade now (the same run started by hand): the lock, the planner and signer pins of
+//       run/setup.deep-r3-trade.json (the paths must be this install's), `planner wake` once, the final status; --push
+//       first takes the repository lock (each cloud run has a clone of its own, so the arm lock cannot see another run;
+//       see repoLock below), then commits and pushes the run records while the run lasts and at its end
 //   node ... routine.cjs clearance [--push]
 //       the no-send check of an install: c, d, e, f, g --indep and exec --check on a new run-id; signs nothing. It
 //       passes only when exec --check checked a plan (an empty plan checks nothing), and it writes
@@ -34,8 +35,9 @@
 // `node r3.cjs <the same>` at the project root is the short form.
 //
 // Every subcommand prints one JSON line. Exit codes, as the old wrapper's: 0 done; 1 internal error; 2 usage, config,
-// or the lock is held; 3 the run aborted; 4 refused at the gates (a pin, a missing tool or key) or, from `trade`, the
-// planner's own safety stop; 5 nothing to trade on (no-csv, csv-store-mismatch) or, from `trade`, the
+// the lock is held, or (trade --push) the repository lock could not be taken; 3 the run aborted; 4 refused at the gates
+// (a pin, a missing tool or key; from trade --push, a commit outside run/ on origin that the pin check did not see) or,
+// from `trade`, the planner's own safety stop; 5 nothing to trade on (no-csv, csv-store-mismatch) or, from `trade`, the
 // planner's transport failure; 6 a time or turn budget ran out. `trade` passes the planner's exit code through
 // otherwise (`exitFor`). It signs nothing itself: every send is the planner's, through the signer.
 'use strict';
@@ -50,6 +52,8 @@ const ROOT = process.cwd();
 const SCRIPTS = __dirname;
 const RUN = path.join(ROOT, 'run');
 const LOCK = path.join(RUN, '.lock.deep-r3-trade');
+const REPO_LOCK = path.join(RUN, '.repo-lock.deep-r3-trade.json');
+const REPO_LOCK_GIT = 'run/.repo-lock.deep-r3-trade.json';
 const SETUP = path.join(RUN, 'setup.deep-r3-trade.json');
 const LOG = path.join(RUN, 'wake-deep-r3.log');
 const OUT = path.join(RUN, 'wake-deep-r3-out.json');
@@ -129,6 +133,16 @@ function ethersIn(dir, from) {
   return 'installed';
 }
 function install(c, opts) {
+  // a live run of this clone runs the very files install rewrites: on the operator's own computer a Codex task's
+  // trade now shares one clone and one set of tool folders with the scheduled run, so it stops here, writing nothing.
+  // A lock with no readable owner counts as live only while it is younger than the stale rule (clearStaleLock's), and
+  // a committed one is left to trade, which names the fix (lock-committed)
+  if (fs.existsSync(LOCK) && !String(git(['ls-files', '--', 'run/.lock.deep-r3-trade']).stdout || '').trim()) {
+    let o = null; try { o = readJson(path.join(LOCK, 'owner.txt')); } catch (e) { o = null; }
+    const limitH = Number(((readSetup() || {}).schedule || {}).time_limit_hours) || 6;
+    const live = o ? ownerAlive(o) : Date.now() - fs.statSync(LOCK).mtimeMs <= (limitH + 1) * 3600000;
+    if (live) throw new Exit(2, `another run of this clone holds run/.lock.deep-r3-trade (${o ? `run ${o.run_id}, pid ${o.pid}` : 'its owner file unreadable, the lock younger than the time limit + 1 h'}): install would rewrite the tools that run uses; refused, nothing written`, { status: 'lock-held' });
+  }
   const P = paths(c);
   let prior = null; try { prior = readJson(path.join(c.signerDir, 'signer.config.json')); } catch (e) { prior = null; }
   if (prior && prior.signerMode && prior.signerMode !== 'password-file') {
@@ -210,12 +224,16 @@ function startTimeOf(pid) {
     const t = Date.parse(String(r.stdout || '').trim() + ' UTC'); return Number.isFinite(t) ? t : null;
   } catch (e) { return null; }
 }
+// a recorded start with no zone is ps's lstart text, which every writer takes with TZ=UTC (planner lib.processStartTime,
+// the session-owner.json snippet of I-setup.md I.2 section 6): read as UTC, like startTimeOf, or off UTC a live owner
+// would read as dead
+function recordedStart(s) { const t = String(s || '').trim(); return Date.parse(/(Z|[+-]\d\d:?\d\d|\bUTC|\bGMT)$/i.test(t) ? t : `${t} UTC`); }
 // alive: the pid exists on this host and started within 2 seconds of the recorded start; anything unreadable counts as alive
 function ownerAlive(o) {
   if (!o || !Number.isInteger(o.pid)) return true;
   if (o.host && o.host !== os.hostname()) return false; // another machine's lock: only its age can clear it
   try { process.kill(o.pid, 0); } catch (e) { if (e.code === 'ESRCH') return false; }
-  const recorded = Date.parse(o.process_start_time); const actual = startTimeOf(o.pid);
+  const recorded = recordedStart(o.process_start_time); const actual = startTimeOf(o.pid);
   if (!Number.isFinite(recorded) || actual === null) return true;
   return Math.abs(actual - recorded) <= 2000;
 }
@@ -251,6 +269,10 @@ function git(args, o = {}) { return cp.spawnSync('git', args, { cwd: ROOT, encod
 // A checkpoint (rebase false) runs while the planner writes run/: it only commits and pushes, and when origin has moved
 // it skips, because a pull would check files out under the planner's feet. The final push, after the planner has
 // exited, pulls and rebases (records never collide); a pull that fails is a failed push, its rebase aborted.
+// the branch the records and the repository lock go to: git.branch, else the clone's current branch, never a detached
+// HEAD (a push to HEAD:HEAD is no branch)
+const NO_BRANCH = 'this clone is on no branch (a detached HEAD): set git.branch in routine.config.json (main)';
+function recordsBranch(c) { const b = c.git.branch || String(git(['rev-parse', '--abbrev-ref', 'HEAD']).stdout || '').trim(); return b && b !== 'HEAD' ? b : null; }
 function pushRecords(c, message, only, { rebase = true } = {}) {
   const spec = [...(only ? [].concat(only).map((o) => `run/${o}`) : ['run']), ...RECORD_EXCLUDES.map((x) => `:(exclude,glob)run/${x}/**`)];
   const add = git(['add', '-f', '-A', '--', ...spec]);
@@ -258,7 +280,8 @@ function pushRecords(c, message, only, { rebase = true } = {}) {
   if (git(['diff', '--cached', '--quiet']).status === 0) return { pushed: false, nothing: true };
   const cm = git(['-c', `user.name=${c.git.name}`, '-c', `user.email=${c.git.email}`, 'commit', '-q', '--no-verify', '-m', message]);
   if (cm.status !== 0) return { pushed: false, error: clip(cm.stderr || cm.stdout, 300) };
-  const branch = c.git.branch || String(git(['rev-parse', '--abbrev-ref', 'HEAD']).stdout || '').trim();
+  const branch = recordsBranch(c);
+  if (!branch) return { pushed: false, error: NO_BRANCH };
   let last = null;
   for (let i = 0; i < 4; i++) {
     const p = git(['push', '-q', 'origin', `HEAD:${branch}`]);
@@ -271,6 +294,81 @@ function pushRecords(c, message, only, { rebase = true } = {}) {
   }
   return { pushed: false, branch, error: clip(last, 300) };
 }
+
+// ---- the repository lock (trade --push). A cloud run works in a clone of its own, so the arm lock above cannot see
+// another run, and a trade now (the routine's Run now) during a scheduled run would be a second sender on the wallet.
+// So before the wake the run fetches origin and looks before it takes anything in: a commit outside run/ stops it
+// (code-moved) with its working tree untouched, so the session that holds the key never runs or reads code its pin
+// check did not see. Else it fast-forwards (nothing of this run is written yet), and stops (lock-held) while
+// run/.repo-lock.deep-r3-trade.json names a run whose expires_at has not passed. Else it commits its own lock and
+// pushes it: git takes a push only on top of the head it was made on, so of two runs that start together one push
+// lands and the other, refused, fetches, finds that lock and stops. The final push removes it; a run that dies leaves
+// it until its expires_at (the time limit + 1 h, the arm lock's rule), or until the operator removes it by hand.
+function readRepoLock() { if (!fs.existsSync(REPO_LOCK)) return null; try { return readJson(REPO_LOCK); } catch (e) { return { unreadable: true }; } }
+const lockExpired = (l) => !!l && !l.unreadable && Number.isFinite(Date.parse(l.expires_at)) && Date.now() > Date.parse(l.expires_at);
+const lockHolder = (l) => (l.unreadable ? { unreadable: true } : { run_id: l.run_id || null, started_at: l.started_at || null, expires_at: l.expires_at || null });
+// the lock's life: the setup record as fetched (the planner's deadline comes from it) and never shorter than the one
+// read before. A time limit that is missing or not a positive number refuses the lock: the planner would then set
+// itself no deadline at all, and the lock could expire under a run still sending
+function lockLimitHours(before) {
+  const h = Number(((readSetup() || {}).schedule || {}).time_limit_hours);
+  return Number.isFinite(h) && h > 0 ? Math.max(before, h) : null;
+}
+function acquireRepoLock(c, limitH) {
+  const branch = recordsBranch(c);
+  if (!branch) return { unavailable: NO_BRANCH };
+  const id = ['-c', `user.name=${c.git.name}`, '-c', `user.email=${c.git.email}`];
+  const dirty = String(git(['status', '--porcelain', '--untracked-files=no']).stdout || '').trim();
+  if (dirty) return { unavailable: `tracked files differ from HEAD in this clone (${clip(dirty.replace(/\s+/g, ' '), 200)}): the repository lock needs a clean clone` };
+  const pinned = String(git(['rev-parse', 'HEAD']).stdout || '').trim();
+  const mine = new Set(); // the tokens of this run's own lock commits: a push that landed but reported an error is still ours
+  let last = '';
+  for (let i = 0; i < 5; i++) {
+    const fe = git(['fetch', '-q', 'origin', branch]);
+    if (fe.status !== 0) return { unavailable: `git fetch from origin ${branch} failed${c.git.branch ? '' : ' (git.branch is empty in routine.config.json, so this clone\'s branch was used: set it to main)'}: ${clip(fe.stderr || fe.stdout, 300)}` };
+    if (git(['diff', '--quiet', pinned, 'FETCH_HEAD', '--', '.', ':(exclude)run']).status !== 0) {
+      const which = String(git(['log', '-1', '--format=%h %s', `${pinned}..FETCH_HEAD`, '--', '.', ':(exclude)run']).stdout || '').trim() || 'a commit outside run/';
+      return { moved: `origin's ${branch} has a commit outside run/ that this run's pin check did not see (${clip(which, 120)}): pin the new tree first (README, Change the code or the config)` };
+    }
+    const mg = git([...id, 'merge', '-q', '--ff-only', 'FETCH_HEAD']);
+    if (mg.status !== 0) return { unavailable: `this clone cannot fast-forward to origin's ${branch}: ${clip(mg.stderr || mg.stdout, 300)}` };
+    const held = readRepoLock();
+    if (held && !held.unreadable && mine.has(held.token)) return { lock: held, branch, replaced: null };
+    if (held && !lockExpired(held)) return { held };
+    const hours = lockLimitHours(limitH);
+    if (!hours) return { unavailable: 'schedule.time_limit_hours in run/setup.deep-r3-trade.json is missing or not a positive number of hours: the repository lock expires by it, and the planner sets its deadline by it (6, or 1 at first in a Codex cloud task)' };
+    const now = Date.now();
+    const lock = { run_id: newRunId(''), token: crypto.randomBytes(8).toString('hex'), started_at: new Date(now).toISOString(), expires_at: new Date(now + (hours + 1) * 3600000).toISOString(), host: os.hostname() };
+    mine.add(lock.token);
+    fs.writeFileSync(REPO_LOCK, JSON.stringify(lock, null, 1) + '\n');
+    const msg = `lock: run ${lock.run_id} started${held ? ` (the expired lock of run ${held.run_id}, started ${held.started_at}, replaced)` : ''}`;
+    const add = git(['add', '-f', '--', REPO_LOCK_GIT]);
+    const cm = add.status === 0 ? git([...id, 'commit', '-q', '--no-verify', '-m', msg]) : add;
+    if (cm.status !== 0) {
+      git(['reset', '-q', '--', REPO_LOCK_GIT]);
+      if (held) git(['checkout', '-q', 'HEAD', '--', REPO_LOCK_GIT]); else fs.rmSync(REPO_LOCK, { force: true });
+      return { unavailable: `the lock commit failed: ${clip(cm.stderr || cm.stdout, 300)}` };
+    }
+    const p = git(['push', '-q', 'origin', `HEAD:${branch}`]);
+    if (p.status === 0) return { lock, branch, replaced: held ? lockHolder(held) : null };
+    last = p.stderr || p.stdout;
+    // refused: another push landed first, perhaps another run's lock (or this one landed and the answer was lost:
+    // the next fetch finds this run's own token). Drop this commit (the clone was clean, so only the lock file changes
+    // back) and look again
+    const rs = git(['reset', '-q', '--keep', 'HEAD~1']);
+    if (rs.status !== 0) return { unavailable: `the lock push was refused and the lock commit could not be dropped: ${clip(rs.stderr || rs.stdout, 300)}` };
+  }
+  return { unavailable: `the lock push was refused 5 times: ${clip(last, 300)}` };
+}
+// the run's own lock leaves the working tree, so the next records push carries its removal
+function dropRepoLock(lock) {
+  if (!lock) return null;
+  const cur = readRepoLock();
+  if (!cur || cur.token !== lock.token) return 'not ours';
+  fs.rmSync(REPO_LOCK, { force: true });
+  return 'removed';
+}
+const repoLockOut = (lock, pushed) => (lock ? { run_id: lock.run_id, released: !!(pushed && pushed.pushed), ...(pushed && pushed.pushed ? {} : { note: `still on origin until ${lock.expires_at}, or until removed by hand: the records were not pushed` }) } : null);
 
 // ---- the final status, as the old wrapper wrote it
 function wakeStatus(rid) { try { return readJson(path.join(RUN, rid, 'wake-status.json')); } catch (e) { return null; } }
@@ -308,30 +406,59 @@ function wake(planner, rid, c, push) {
   });
 }
 async function trade(c, opts) {
-  const setup = readSetup();
+  // where the key lives in environment variables the run is a cloud one, in a clone of its own that is thrown away:
+  // it must take the repository lock and push its records, or it trades unseen by the other runs and loses its records
+  if (!opts.push && (process.env.R3_KEYSTORE_JSON || process.env.R3_KEYSTORE_PASSWORD)) {
+    throw new Exit(2, 'trade without --push where R3_KEYSTORE_JSON or R3_KEYSTORE_PASSWORD is set: a cloud run takes the repository lock and pushes its records (node r3.cjs trade --push); refused, nothing run');
+  }
+  let setup = readSetup();
   if (!setup) throw new Exit(2, 'no run/setup.deep-r3-trade.json: set the bot up first (steps/I-setup.md)');
   const limitH = Number((setup.schedule || {}).time_limit_hours) || 6;
   fs.mkdirSync(RUN, { recursive: true });
+  // a committed arm lock would make every cloud run skip, and once old enough its clearing would leave the clone dirty
+  if (opts.push && String(git(['ls-files', '--', 'run/.lock.deep-r3-trade']).stdout || '').trim()) {
+    return { exit: 2, out: { ok: false, subcommand: 'trade', exit: 2, status: 'lock-committed', notes: 'run/.lock.deep-r3-trade is committed in the trading repository, so no run can start: remove it there (git rm -r --cached run/.lock.deep-r3-trade, commit, push)' } };
+  }
   clearStaleLock(limitH);
-  const rid = newRunId(''); // before the lock, so a taken run-id leaves no lock behind
+  let rid = newRunId(''); // before the lock, so a taken run-id leaves no lock behind
   try { fs.mkdirSync(LOCK); } catch (e) {
     if (e.code !== 'EEXIST') throw e;
     log('lock held, skipping');
     return { exit: 2, out: { ok: false, subcommand: 'trade', exit: 2, status: 'lock-held', notes: 'another run holds run/.lock.deep-r3-trade' } };
   }
-  try { return await tradeLocked(c, opts, setup, rid); } catch (e) {
+  let repoLock = null;
+  try {
+    if (opts.push) {
+      // nothing is logged before this or on a refusal here: the log is a tracked file, and the pull needs a clean clone
+      const r = acquireRepoLock(c, limitH);
+      if (!r.lock) {
+        fs.rmSync(LOCK, { recursive: true, force: true });
+        const [code, status, notes] = r.held
+          ? [2, 'lock-held', r.held.unreadable ? `${REPO_LOCK_GIT} is unreadable: no run can start until the operator removes it (SETUP.md, Troubleshooting)` : `run ${r.held.run_id} holds the repository lock (${REPO_LOCK_GIT}) since ${r.held.started_at}, until it ends or ${r.held.expires_at}`]
+          : r.moved ? [4, 'code-moved', r.moved] : [2, 'lock-unavailable', r.unavailable];
+        return { exit: code, out: { ok: false, subcommand: 'trade', exit: code, status, notes, ...(r.held ? { holder: lockHolder(r.held) } : {}) } };
+      }
+      repoLock = { ...r.lock, branch: r.branch, replaced: r.replaced };
+      rid = r.lock.run_id;
+      setup = readSetup(); // the pull may have brought a newer setup record
+      if (!setup) throw new Exit(2, 'no run/setup.deep-r3-trade.json after the pull: set the bot up first (steps/I-setup.md)');
+    }
+    return await tradeLocked(c, opts, setup, rid, repoLock);
+  } catch (e) {
     // anything that throws once the lock is taken releases it: ours, or one whose owner file was never written
     let o = null; try { o = readJson(path.join(LOCK, 'owner.txt')); } catch (e2) { o = null; }
     if (!o || o.pid === process.pid) fs.rmSync(LOCK, { recursive: true, force: true });
+    if (dropRepoLock(repoLock) === 'removed') { try { pushRecords(c, `records: run ${rid} ended on an internal error`); } catch (e2) { /* best effort: the lock expires */ } }
     throw e;
   }
 }
-async function tradeLocked(c, opts, setup, rid) {
+async function tradeLocked(c, opts, setup, rid, repoLock) {
   const owner = { pid: process.pid, process_start_time: new Date(Date.now() - process.uptime() * 1000).toISOString(), host: os.hostname(), started_at: iso(), stage: 'claude-p', run_id: rid };
   const ownerText = JSON.stringify(owner);
   fs.writeFileSync(path.join(LOCK, 'owner.txt'), ownerText, { flag: 'wx' });
   const P = paths(c);
   log(`run ${rid}: lock taken by routine.cjs (pid ${process.pid} on ${os.hostname()})`);
+  if (repoLock) log(`run ${rid}: repository lock ${REPO_LOCK_GIT} pushed to origin/${repoLock.branch}, until ${repoLock.expires_at}${repoLock.replaced ? ` (it replaced the expired lock of run ${repoLock.replaced.run_id})` : ''}`);
   if (fs.existsSync(P.sendLock)) log(`leftover signer send-lock ${P.sendLock}, not deleted`);
   log(`signer log "${P.signerLog}"`);
 
@@ -350,8 +477,9 @@ async function tradeLocked(c, opts, setup, rid) {
     if (!why) continue;
     const ws = finalize(rid, 4, `refused at the gates: ${why}`);
     release(ownerText); log(`run ${rid}: refused at the gates: ${why}`);
+    dropRepoLock(repoLock);
     const pushed = opts.push ? pushRecords(c, `records: run ${rid} refused at the gates`) : null;
-    return { exit: 4, out: { ok: false, subcommand: 'trade', run_id: rid, exit: 4, status: ws.status, notes: why, pushed } };
+    return { exit: 4, out: { ok: false, subcommand: 'trade', run_id: rid, exit: 4, status: ws.status, notes: why, pushed, ...(repoLock ? { repo_lock: repoLockOut(repoLock, pushed) } : {}) } };
   }
   const live = liveSessions();
   fs.writeFileSync(path.join(LOCK, 'live-runs.txt'), live.join('\n'));
@@ -363,8 +491,9 @@ async function tradeLocked(c, opts, setup, rid) {
   const RC = exitFor(rc, ws);
   release(ownerText);
   log(`run ${rid} finished, exit ${RC}`);
+  dropRepoLock(repoLock);
   const pushed = opts.push ? pushRecords(c, `records: run ${rid} finished (${ws.status}), exit ${RC}`) : null;
-  return { exit: RC, out: { ok: RC === 0, subcommand: 'trade', run_id: rid, exit: RC, planner_exit: rc, status: ws.status, stopped_at_step: ws.stopped_at_step || null, report: `run/${rid}/report.md`, live_supervised_runs: live, pushed } };
+  return { exit: RC, out: { ok: RC === 0, subcommand: 'trade', run_id: rid, exit: RC, planner_exit: rc, status: ws.status, stopped_at_step: ws.stopped_at_step || null, report: `run/${rid}/report.md`, live_supervised_runs: live, pushed, ...(repoLock ? { repo_lock: repoLockOut(repoLock, pushed) } : {}) } };
 }
 
 // ---- clearance: the no-send check of an install (I-setup.md I.2 section 7, The planner)
@@ -435,10 +564,13 @@ function selftest(c, opts) {
     passed: cases.length - fails.length, failed: fails, results: `run/${rid}/selftest/results.json`, pushed } };
 }
 
+// the newest run's final status, and the repository lock as this clone has it (pull first to see a cloud run's)
 function status() {
+  const l = readRepoLock();
+  const repo_lock = l ? { ...lockHolder(l), expired: lockExpired(l) } : null;
   const ids = fs.existsSync(RUN) ? fs.readdirSync(RUN).filter((d) => /^\d{4}-\d\d-\d\dT\d{4}Z(-w2)?$/.test(d)).sort() : [];
-  for (const rid of ids.reverse()) { const w = wakeStatus(rid); if (w) return { exit: 0, out: { ok: true, subcommand: 'status', run_id: rid, status: w.status, stopped_at_step: w.stopped_at_step || null, finished_at: w.finished_at || null, report: `run/${rid}/report.md` } }; }
-  return { exit: 0, out: { ok: true, subcommand: 'status', run_id: null, status: null } };
+  for (const rid of ids.reverse()) { const w = wakeStatus(rid); if (w) return { exit: 0, out: { ok: true, subcommand: 'status', run_id: rid, status: w.status, stopped_at_step: w.stopped_at_step || null, finished_at: w.finished_at || null, report: `run/${rid}/report.md`, repo_lock } }; }
+  return { exit: 0, out: { ok: true, subcommand: 'status', run_id: null, status: null, repo_lock } };
 }
 
 // ---- the command line

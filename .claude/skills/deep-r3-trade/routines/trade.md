@@ -1,7 +1,8 @@
 # The trading routine
 
 You are the AI agent of deep-r3-trade's trading routine (`../steps/I-setup.md` I.2 §7). You run one scheduled run of
-the pipeline C to H on the 98 Round 3 originality markets, then report it. You work in the trading repository's
+the pipeline C to H on the 98 Round 3 originality markets, then report it. A trade now, the routine's *Run now*, is
+the same run started by hand: everything here applies to it unchanged. You work in the trading repository's
 clone, the folder holding `r3.cjs`.
 
 **Your session starts inside the trading clone.** The routine attaches one repository, the trading repository, and
@@ -38,23 +39,36 @@ keeps the key and the wallet safe.
 ## The run
 
 1. `node r3.cjs install`. It installs the planner, the chain helper and the signer outside the project, from this
-   repository, with the key from this environment. Stop and report if it fails, if `keys` is not "installed from the
+   repository, with the key from this environment. Stop and report if it fails (on the operator's own computer it
+   exits 2, `lock-held`, while another run of the clone is live), if `keys` is not "installed from the
    environment", or if `pins` is not `match` for both the planner and the signer. A missing key has no exit code of
    its own: `install` reports `keys` "absent" and exits 0, and the first send would fail before signing. Stop on it.
 2. `node r3.cjs trade --push`, in the foreground (never in the background), with the Bash tool's `timeout` set to
    `21600000`: 6 hours, the run's time limit (`schedule.time_limit_hours`), which this environment allows by setting
    `BASH_DEFAULT_TIMEOUT_MS` and `BASH_MAX_TIMEOUT_MS` to `21600000`. It reads the setup record, chooses the run-id
-   and takes the lock; checks that the setup record pins exactly the planner and signer `install` just laid down
+   and takes the lock; takes the repository lock (it pulls the trading repository, then pushes
+   `run/.repo-lock.deep-r3-trade.json`, so no other run of this routine trades the wallet at the same time, and
+   chooses the run-id again after the pull); checks that the setup record pins exactly the planner and signer `install` just laid down
    (their paths and sha256) and that the planner's config names that signer and helper; runs the planner's `wake`
    exactly once (the repair of earlier runs, Half A: C, D on the stored CSV, E, F, G and the sends; Half B: merges and
    redeems; H: the scores); writes the final status; and commits and pushes the run records (`run/` only).
 3. If step 2's JSON line has a `run_id`, read `run/<run-id>/report.md` and `run/<run-id>/wake-status.json`. If it has
    none, skip this step and report its exit code and its `status` or `error`: `lock-held` (exit 2) means another run
-   held the lock; anything else means the run never started (no setup record, a config error, an internal error).
+   held a lock: name its `holder` (run-id, start, expiry) when the line gives one, and say this run did nothing;
+   `lock-committed` (exit 2) means `run/.lock.deep-r3-trade` is committed in the trading repository (its `notes` give
+   the fix);
+   `lock-unavailable` (exit 2) means the repository lock could not be taken: a git fetch, pull or push failed, tracked
+   files in this clone differ from HEAD, the clone is on a detached HEAD while `routine.config.json`'s `git.branch` is
+   empty, or `schedule.time_limit_hours` in the pulled setup record is missing or not a positive number; report its
+   `notes`, which say which;
+   `code-moved` (exit 4) means the trading repository has a commit outside `run/` that your pin check did not see, so
+   the routine needs the new tree pinned; anything else means the run never started (no setup record, a config
+   error, an internal error).
 
-`r3.cjs` exits 0 when done; 1 on an internal error; 2 on a usage or config error (no setup record included), or when
-another run holds the lock; 3 when the run aborted (in a setup run: the self-test or the clearance did not pass); 4
-when it was refused at the gates (a pin, a path that is not this install's, a missing tool; from `install`, a key
+`r3.cjs` exits 0 when done; 1 on an internal error; 2 on a usage or config error (no setup record included), when
+another run holds a lock, or when the repository lock could not be taken; 3 when the run aborted (in a setup run: the
+self-test or the clearance did not pass); 4 when it was refused at the gates (a pin, a path that is not this
+install's, a missing tool, a commit outside `run/` that the pin check did not see; from `install`, a key
 variable that is not the bot wallet's encrypted keystore, an allowlist that is missing or does not match
 `allowlistSha256`, an `ethers` install that failed, or a `signerDir` holding a signer of another mode) or the planner
 made a safety stop; 5 when there was nothing to trade on (`no-csv`, `csv-store-mismatch`) or the planner had a
@@ -72,8 +86,9 @@ place of steps 2 and 3, run `node r3.cjs selftest --cases <the folder the prompt
 or sends anything, and neither decrypts the key. Report both JSON lines: the self-test's passed and failed cases; the
 clearance's `passed` and `empty_plan`, each step's exit and stop, and its record `run/<run-id>/clearance.json`;
 whether each was pushed; and the planner's and signer's paths and sha256 that `install` printed, which the operator
-records. A clearance that stopped at D (`no-csv`, `csv-store-mismatch`), found an empty plan (`empty_plan: true`) or
-whose `exec --check` did not return `check-passed` has not passed: say so, and do not run it again.
+records. A clearance that stopped at D (`no-csv`, `csv-store-mismatch`) or whose `exec --check` failed has not passed: say
+so, and do not run it again. An empty plan (`empty_plan: true`) with every step at exit 0 is fine for setup when the
+wallet holds no free sUSDS yet (only USDC, which the first live run converts): report it as that.
 
 ## A Codex scheduled task on your own computer
 
@@ -93,7 +108,9 @@ scheduled task, on your own computer*). Everything above holds, with these diffe
   the operator pushes `run/` when they want a copy on GitHub. Run it in the foreground with your shell tool's timeout
   (`timeout_ms`) set to `21600000`, the 6 hours of `schedule.time_limit_hours`, never left at its default: the
   default is short, and when it runs out it kills the run. If the tool yields while the command still runs, keep
-  waiting on that same process until it ends; never start a second one.
+  waiting on that same process until it ends; never start a second one. Without `--push` there is no repository
+  lock: the clone's own lock keeps a trade now (the task's *Run now*) from overlapping a scheduled run. The second
+  one's `install` refuses (exit 2, `lock-held`, nothing written), or its `trade` ends `lock-held`: stop and report.
 - **Your commands** are the pin check, `node r3.cjs install`, `node r3.cjs trade` and `node r3.cjs status`, and you
   may read files. A Codex task has no tool lists: what bounds you is your prompt, this file, the Codex permissions the
   operator set and the Codex rules that make `node r3.cjs planner` ask (a scheduled task never asks, so that spelling
@@ -101,12 +118,42 @@ scheduled task, on your own computer*). Everything above holds, with these diffe
   installed planner or signer by their own paths, `git`, `npm` or any other command, and never edit a file. `r3.cjs`'s refusal of the planner's send entry points is keyed on the key's
   environment variables, which this computer does not set, so it does not apply here.
 
+## A Codex cloud task
+
+When your prompt says you are a Codex cloud task (or a setup run in one), you are not a Claude Code routine: you run in
+a Codex cloud environment in ChatGPT, started by its schedule or by hand (`../steps/I-setup.md` I.2 §7, *A Codex cloud
+task*). Everything above holds, with these differences:
+
+- **The pin check** is your prompt's `node -e` command, as for a Codex scheduled task (above). Your task starts in
+  the trading clone: run no `cd`.
+- **The key** is in this environment's variables, as in a routine: in step 1, `keys` must read "installed from the
+  environment".
+- **Step 2 is `node r3.cjs trade --push`**, as in a routine, with your shell tool's timeout (`timeout_ms`) set to
+  `21600000`, never left at its default; if the tool yields while the command still runs, keep waiting on that same
+  process; never start a second one. A setup run's `selftest` and `clearance` take the same timeout.
+- **Pushing is what makes this cloud usable.** A JSON line's `pushed` is an object: if `pushed.pushed` is not `true`,
+  report `pushed.error` and say the records were not pushed. On `lock-unavailable`, report its `notes`. A fetch that
+  failed once, or a push refused because another push landed, can be passing: the next run tries again. Only a push
+  refused for want of permission (`403`, `denied` or `Permission` in the notes), or the same failure in the next run
+  too, means this cloud cannot push to the trading repository: then say plainly that the bot cannot run here without
+  it. The other causes are in SETUP.md's Troubleshooting.
+- **This task ends with your reply.** If a follow-up message arrives in this same task, run nothing and read nothing:
+  say that a new task must be started (this task's saved files hold the key files).
+- **Your commands** are the pin check, `node r3.cjs install`, `node r3.cjs trade --push` and `node r3.cjs status` (in
+  a setup run, `node r3.cjs selftest --cases <the folder the prompt names> --push` and `node r3.cjs clearance --push`
+  in place of `trade`), and you may read files. A Codex cloud task has no tool lists: what bounds you is your prompt,
+  this file, the code pin and the signer's allowlist. `r3.cjs`'s refusal of the planner's send entry points and the
+  planner's gates do not stop the installed planner or signer run by its own path (it sends in supervised mode,
+  reading no gate): only these instructions do. Never run `node r3.cjs planner`, the installed planner or signer by
+  their own paths, `git`, `npm` or any other command, and never edit a file.
+
 ## Your reply
 
 A short report: the run-id; the status (`traded`, `nothing-to-do`, `no-csv`, `csv-store-mismatch`, `aborted`); what
 traded (positions sent, the stake); anything the report flags (a stop and its cause, a half-done group the next run
-will repair, a nonce anomaly, a gate refusal); `r3.cjs`'s exit code; and whether the records were pushed. Say plainly
-when nothing traded and why.
+will repair, a stuck nonce the run cancelled itself, a nonce anomaly, a gate refusal); `r3.cjs`'s exit code; and whether the records were pushed (when
+`repo_lock.released` is false, that the repository lock stays on origin until its expiry). Say plainly when nothing
+traded and why.
 
 ## What you never do
 

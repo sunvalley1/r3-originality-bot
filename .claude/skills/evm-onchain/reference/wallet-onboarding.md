@@ -59,8 +59,8 @@ OS user can use a non-interactive wallet, so seer-trade's prepare-only wake must
 (non-admin) OS user that cannot reach the key; its I.2 signer-isolation checks apply. If the operator does
 not set that up, do not schedule it: run the pipeline manually when wanted. Never schedule that wake under
 the operator's own account, and in every signer mode it holds no signer. deep-r3-trade's scheduled run
-instead trades autonomously every day once its setup is complete (the operator's explicit consent on the
-first run, the signer self-test passed and one green supervised run); it may run under the operator's own
+instead trades autonomously every day once its setup is complete (the operator's explicit consent asked
+at setup, the signer self-test passed and the setup run's no-send clearance; no supervised trading run); it may run under the operator's own
 account and signs only through the signing process, never by reading the key. Autonomous R3 needs an
 operator-supplied signer (the reference `signer.cjs` in [deep-r3-trade's `scripts/`](../../deep-r3-trade/scripts/signer.README.md) is one) that enforces deep-r3-trade's scope-only allowlist (what may be signed, never how
 much or how often) and has passed its allowlist self-test: a policy check, not a simulation, where every
@@ -153,7 +153,8 @@ EOA but delegated code and atomic call behavior are new facts to verify. After e
 the backend's public balance and possession checks; `wallet:status` continues to describe only the
 original local EOA, not the executor's holder or session signer.
 
-During onboarding, retain `first_successful_run: null`, `schedule.created_at: null`, unknown fields as
+During onboarding, retain `schedule.created_at: null` (and, for seer-trade, `first_successful_run: null`;
+deep-r3-trade no longer writes or reads that field), unknown fields as
 `null`, and preflight checks that have not run as unverified. A successful wallet signature or incoming
 deposit cannot populate a successful trading run. Preserve any real prior run/schedule history when
 resuming; never replace a finished setup with the illustrative all-passed JSON example.
@@ -163,5 +164,5 @@ bound, and fees. Existing explicit bounded test permission remains valid for tha
 the same permission again. Willingness to lose a wallet's balance alone is not approval for unrelated
 trades, automatic conversion, delegation, deployment or recurring spending. Ordinary trading approvals
 remain in G. seer-trade's I.2 remains prepare-only and explicitly requested after a successful supervised
-run; deep-r3-trade asks on its first run, and its I.2 trades autonomously only after the operator's
-explicit consent, the signer self-test passed and one green supervised run.
+run; deep-r3-trade asks at setup, and its I.2 trades autonomously only after the operator's explicit
+consent, the signer self-test passed and the setup run's no-send clearance (no supervised trading run).

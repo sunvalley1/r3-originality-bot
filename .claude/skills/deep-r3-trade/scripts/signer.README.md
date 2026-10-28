@@ -13,8 +13,8 @@ sign lives in `signer.cjs`. Its only dependency is `ethers` 6.17. Plain Node 22,
 
 | | |
 |---|---|
-| Restricted subcommands (the ones the planner starts) | `check <file>`, `simulate <file>`, `send <file> [--nonce <n>]` |
-| Supervised subcommands (the planner never starts them: a human runs them in a supervised session, where each call prompts) | `info`, `reconcile`, `clear-nonce <n>`, `sweep-token <token> [--amount <raw>]`, `sweep-eth --amount <wei>`, `allowlist-init ...` |
+| Restricted subcommands (the ones the planner starts for plan sends) | `check <file>`, `simulate <file>`, `send <file> [--nonce <n>]` |
+| Supervised subcommands (a human runs them in a supervised session, where each call prompts; the planner starts only `clear-nonce` and `reconcile`, in a scheduled run, to clear a stuck nonce: G section 8, *Nonce pinning*) | `info`, `reconcile`, `clear-nonce <n>`, `sweep-token <token> [--amount <raw>]`, `sweep-eth --amount <wei>`, `allowlist-init ...` |
 | Signer facts to record | `signer_mode: "local-encrypted-eoa"`, `atomic_batches: false` (one call per `send`), `nonce_pinning: true` only after the setup nonce test passes (7.4; the `nonce_pinning` that `info` prints is this signer's capability, not that result), reports `input_hash` at broadcast |
 
 ## 1. What it guarantees, and where each guarantee lives
@@ -293,9 +293,9 @@ $ node signer.cjs send run/in.json
 (exit 4)
 ```
 
-### Supervised entry points (never started by the planner)
+### Supervised entry points (a scheduled run starts only `reconcile` and `clear-nonce`, to clear a stuck nonce: G section 8, *Nonce pinning*)
 
-`reconcile` settles the send-lock a killed or unconfirmed send left behind (statuses `no-lock`, `in-progress`, `cleared`, `landed`, `reverted`, `superseded`, `pending-or-unsent`):
+`reconcile` settles the send-lock a killed or unconfirmed send left behind (statuses `no-lock`, `in-progress`, `lock-unreadable` (exit 5, inspect the lock by hand), `cleared`, `landed`, `reverted`, `superseded`, `pending-or-unsent`):
 ```
 $ node signer.cjs reconcile
 {"status":"pending-or-unsent","hash":"0x9327bef6f5088ba6b9fc67bee9793f38a9ae7a8e930bae127065f48b8c1be4fd","nonce":7,"input_hash":"0x2702f7e2c0195589d00ae7e90b5e999a7aa24b523df5662eed9b2b59b26ccf99","lock_path":"<dir>/main-send.lock","latest_nonce":7,"lock_released":false,"next":"wait, or consume nonce 7 with: node signer.cjs clear-nonce 7"}
@@ -370,8 +370,8 @@ for a call the RPC gave no `maxUsedGas`, never `gasUsed` x 1.2).
   when nothing was broadcast (refusal, nonce-too-low, failed simulation). **Left in place** when a send ends
   `unconfirmed` or the process is killed after the intent: a held lock makes `send` refuse with
   `{"refused":"send-lock"}` (exit 4) until `node signer.cjs reconcile` clears it. `reconcile` and `clear-nonce` are
-  supervised entry points: the planner never starts them, and a human runs them in a supervised session, where each
-  call prompts (I.2 section 6(e)).
+  supervised entry points: a human runs them in a supervised session, where each call prompts (I.2 section 6(e)). The
+  planner starts them only in a scheduled run, to clear a stuck nonce itself (G section 8, *Nonce pinning*).
 * **Hash at broadcast.** Before the single `eth_sendRawTransaction` the signer appends `broadcast-intent` (hash, nonce,
   `input_hash`) to `logPath`, rewrites the lock with the same fields, and prints `{"event":"broadcast", ...}` on stdout
   with the transaction `hash`, its `nonce` and `input_hash`; the write is synchronous, so the line is on the pipe before

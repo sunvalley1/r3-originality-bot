@@ -41,8 +41,10 @@ the arm lock with `owner.txt` stage `claude-p` and runs `wake` once (`steps/I-se
   contacts an RPC: no socket module, no `fetch`, no key-handling code (the test scans every file for it). Every chain
   read goes through the chain helper (`multicall`, `simulate`, `encode`, `keccak256`, `nonce`, `receipt`, `block`,
   `balance`, `fee-history`, `chain-id`, `data`, `data-rows`); every send goes through the signer's `send`, after the
-  signer's own `simulate`; G runs only the signer's policy-only `check`. The signer's supervised entry points (`info`,
-  `reconcile`, `clear-nonce`, `sweep-*`, `allowlist-init`) are refused before any process starts (`lib.runSigner`).
+  signer's own `simulate`; G runs only the signer's policy-only `check`. A scheduled run clears a stuck nonce itself
+  (`exec-core`, G section 8 *Nonce pinning*) with two of the signer's supervised entry points, neither of which moves
+  funds: `clear-nonce <n>` (a zero-value transaction to the signer's pinned owner) and `reconcile`. The others (`info`,
+  `sweep-*`, `allowlist-init`) are refused before any process starts (`lib.runSigner`).
 - **The config is pinned next to `planner.cjs`** (`planner.config.json`, found from `__filename`), never from `argv` or
   an environment variable. A missing, unparsable, symlinked, oversized or unexpected config fails closed (exit 2).
 - **It refuses to run from inside the project folder** (its own folder, or the helper or the signer inside the project),
@@ -54,7 +56,9 @@ the arm lock with `owner.txt` stage `claude-p` and runs `wake` once (`steps/I-se
   what the skill writes there (Half B rows and write-ahead records, cross-run `consumed` and side `Invalid` rows, the
   start-of-run repair's appended `fills.json` rows, its `exec-sends.json` and `exec-state.json` entries and its
   `wake-status.json`, and the repair's recovery sends: their write-ahead records, rows, `recovery.json`, `recovery-tx/`
-  and `recovery-tmp/`); in any of them the settlement scan's cursor `settle-scan.json` (section 6).
+  and `recovery-tmp/`); in any of them the settlement scan's cursor `settle-scan.json` (section 6), and
+  `nonce-cancels.json`, a scheduled run's record of its own cancels of a stuck nonce, written into the run-id that
+  holds the stuck nonce (G section 8 *Nonce pinning*).
 - **Output contract.** Every invocation prints exactly ONE JSON line on stdout, never more than 20,000 characters (a
   longer summary is replaced by a small form with `"truncated": true`); long detail goes to
   `./run/<run-id>/planner/<subcommand>.json`, which also records the helper and signer calls the step made.
@@ -317,21 +321,25 @@ changes (`result: "unchanged"` otherwise).
 ### `wake <run-id>`: the whole scheduled run
 
 Only inside the wrapper: `./run/.lock.deep-r3-trade` held by the wrapper (`owner.txt` stage `claude-p`) naming this
-run-id (else `not-scheduled`, exit 4, nothing written). It writes `wake-status.json` `aborted` first; checks the five
-gates of I.2 section 1 and G section 8 *Two modes* (`first_successful_run`, `autonomy.enabled`, `autonomy.authorized_at`,
+run-id (else `not-scheduled`, exit 4, nothing written). It writes `wake-status.json` `aborted` first; checks the four
+gates of I.2 section 1 and G section 8 *Two modes* (`autonomy.enabled`, `autonomy.authorized_at`,
 `autonomy.signer_selftest_passed_at`, `schedule.signer_allow_rule_added_at`; a null or false one is named, `report.md`
 is written, the wake stops; a setup in signer mode (b) stops the same way first, `unsupported-signer-mode`, section 8);
 runs the start-of-run repair of earlier run-ids that hold an `inflight.json` or
 `inflight.settled.json` and are not final (an unsettled `inflight.json` makes even a run-id final by its
 `wake-status.json` not final, since Half B writes there; a run-id that stopped at its ramp, before `allocation.json`, is
-scanned too): it settles the nonce; it appends the missing `fills.json` row of every transaction of that run-id's plan
+scanned too): it settles the nonce (a not-sent finding on a signer that cannot pin the nonce is first consumed by the
+wake's own `clear-nonce`, recorded in that run-id's `nonce-cancels.json`: G section 8 *Nonce pinning*); it appends
+the missing `fills.json` row of every transaction of that run-id's plan
 that landed without one (after its run stopped, or between a receipt and its row) and of a Half B send recorded there
 (`halfb-tx/tx-n<n>.json`), append only, built from the signed calldata because a receipt read carries no amounts: exact
 for a split, an exact-output count, a set-sell's or a merge's `q`, else the calldata's own bound (`amountOutMinimum` a
 floor, `amountInMaximum` a ceiling), said in the row's `error`; a ramp or setup send gets none; a recovery send recorded
 in that run-id's `recovery.json` gets its row the same way. Once every nonce of the scan is settled and nothing blocks
-a send, it applies the recovery rule (section 6) to each half-done group, some but not all of its transactions landed
-by `exec-state.json` against `g-plan.json` and no recovery settled it, in that run-id under the wrapper's lock, and
+a send, it runs the signer's `reconcile` (a send-lock it keeps, `pending-or-unsent`, `in-progress` or
+`lock-unreadable`, blocks every send of the wake) and applies the recovery rule (section 6) to each half-done group,
+some but not all of its transactions landed by `exec-state.json` against `g-plan.json` and no recovery settled it,
+in that run-id under the wrapper's lock, and
 finalizes the run-id once nothing of it is half-done (completed, unwound, nothing to unwind, or kept because the
 boundary allows neither trading nor merging); otherwise it names the group and leaves the run-id not final. Then Half A: `c`, `d` on the stored CSV, `e`, **the PSM3 ramp** of any
 USDC and USDS at the holder (`planner/ramp.cjs`, I.1 section 5: per asset a quote, the capacity gate
@@ -387,7 +395,9 @@ All proven or fixed on the first live run; the canonical text is `steps/G-mint-a
   `rpc-transport`, no `"simulated":true`, the rate-limit text in `detail`) is re-run the same way, up to 9 more times
   (`lib.signerThrottled`): the executor's pre-send `simulate`, and a `send` only when that attempt printed no
   `broadcast` line and says `"signed":false,"broadcast":false` (its write-ahead record stands; nothing was signed). A
-  `send` that printed a `broadcast` line is never re-run, and `send` is never timed out. A `simulate` still throttled
+  `send` that printed a `broadcast` line is never re-run, and `send` is never timed out. The same holds for the two
+  entry points a scheduled run also starts (G section 8 *Nonce pinning*): a throttled `clear-nonce` is re-run like a
+  `send` and is never timed out, a throttled `reconcile` like a `simulate`. A `simulate` still throttled
   after the re-runs stops with exit 5 `transport` (never `stale-simulation`); a `send` still throttled is retired as
   not broadcast and ends its group like a refusal before any broadcast. Only a `"simulated":true` answer is a
   simulation result, so the pre-send `simulate` (`exec-core.presend`, on every send path) stops with `stale-simulation`
@@ -485,13 +495,15 @@ re-run with one attempt per nonce, a pre-send `simulate` still throttled after i
 `rpc-transport`, `rpc-http` 503 and plain `rpc-error` answers to exit 5 and a `-38xxx` one to exit 3, nothing sent;
 signer mode (b): `exec`, `exec --check` and `halfb --send` refused before any signer call), `wake` (the whole
 scheduled run inside a wrapper lock, the gates, a signer-mode (b) setup refused at the start check, the refusal
-outside the wrapper, D4, the five gates, a Half B affordability skip, exec's and Half B's pre-send `simulate`
+outside the wrapper, D4, the four gates, a Half B affordability skip, exec's and Half B's pre-send `simulate`
 answering an RPC failure (exit 5, nothing sent, the wake `aborted`), the once-only re-plan and the cut, a group exec
 leaves half-done after its in-run recovery stopped ending the wake `aborted` (cause
 `half-done`), the next wake's repair applying the rule to it on the state of the day (Half B's middle merge had taken
 the market's repo tokens back, so the stray leg is sold: unwound, its rows appended, the run-id finalized), and a
 recovered group never acted on again), `repair` (in process: an unsettled Half B write-ahead in a prior final run-id,
-a not-sent finding on a signer that cannot pin the nonce over two wakes, a ramp-stopped run-id; the missing `fills.json`
+a not-sent finding on a signer that cannot pin the nonce over two wakes, a scheduled run's own cancel of it (mined,
+refused, beaten by the old transaction, too close to the deadline; in the run and at the next start-of-run repair) and
+a send-lock its reconcile keeps, a ramp-stopped run-id; the missing `fills.json`
 row appended once, every row kept, for a dual-buy leg, a Half B merge and a Half B child redeem that landed after their
 run stopped; a late approve that makes a skipped group half-done), `boundary` (a resolved middle: the plan, the sends, a
 flip between G and exec, an `M = 0` plan), `mergearb` (F's merge-arb, G's buy-and-merge group, exec and the cross-run
@@ -679,7 +691,7 @@ after one.
   stopped at its ramp; a resolved middle A (the plan built and sent with every mint, a middle-B flip stopping the run
   before the parent mint, an `M = 0` plan); the merge-arb (6 pairs on held child Invalid, its 3b remainder, the
   cross-run Invalid row, every effect exact); the wake's PSM3 ramp (USDC and USDS converted before F, a capacity stop),
-  `f --provisional`; the five gates; a Half B affordability skip; the once-only re-plan and the cut plan.
+  `f --provisional`; the four gates; a Half B affordability skip; the once-only re-plan and the cut plan.
 - **Fork rehearsal of the scheduled path** (2026-10-08, on the 2026-10-08 files). The setup:
   - a local anvil fork of Optimism mainnet at block 157,912,851, on loopback;
   - a throwaway holder funded on the fork with 50 sUSDS, 20 USDC and 1 ETH;

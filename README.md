@@ -5,9 +5,10 @@ A bot that trades the 98 **Deep Funding Round 3 "Originality"** prediction marke
 originality score (0 to 100), and you can buy UP or DOWN on each one.
 
 **An AI agent runs every supervised run and every routine run.** The bot is a Claude Code skill (`.claude/skills/deep-r3-trade/`): the agent reads its
-steps and runs them, by hand in a session or on a schedule as a **Claude Code routine**, which runs in the cloud on any
-operating system with no machine left on. The supervised sessions work with any AI coding agent that can read the
-skill files and run commands.
+steps and runs them, on a schedule or on a trade now: as a **Claude Code routine**, which runs in the cloud on any
+operating system with no machine left on, or, if you choose ChatGPT, as a Codex task in ChatGPT's cloud or on your own
+computer. Setup and any supervised session work with any AI coding agent that can read the skill files and run
+commands.
 
 **The forecast is a CSV you provide** (`steps/D-forecast.md`, `steps/D-methods/csv.md`), in the format of
 deep.seer.pm's upload: trading through the bot is then trading through the interface, every day. Other ways to
@@ -110,7 +111,7 @@ A scheduled run is the **trading routine**. Its agent first checks that the code
 
 **Your private copy.** You keep one private copy of this repo, the **trading repository**: the code,
 `routine.config.json`, `setup/r3-allowlist.json` and the run records in `run/`. Only you and the trading routine (with
-its one-off setup run) use it, and the routine pushes `run/` only. The trading routine attaches it alone, and its
+its one-off setup run), or a Codex cloud task in its place, use it, and they push `run/` only. The trading routine attaches it alone, and its
 session starts inside that clone.
 
 Why only you and the routine push to it: when a session starts, before the agent's first command, Claude Code loads
@@ -146,27 +147,34 @@ the pin (*Running and checking it*).
 SETUP.md": it checks where you are and guides you, doing the commands while you do everything that touches your key,
 your money or a website login. In short:
 
-0. What you need: Git, Node.js 22, Foundry's `cast`, a scheduler (a Claude plan with routines and Claude Code, or a
-   ChatGPT plan with Codex scheduled tasks), a new wallet funded on Optimism, your CSV.
-1. A **private copy** of this repository, the *trading* repository, with the Claude GitHub app given access.
+0. What you need, and **your choice of where it runs**: **Claude** (a routine in the cloud: a Claude plan with routines
+   and Claude Code), **ChatGPT in the cloud** (a Codex cloud environment and a schedule your plan offers for it) or
+   **ChatGPT on your own computer** (a Codex scheduled task); then Git, Node.js 22, Foundry's `cast`, a new wallet
+   funded on Optimism, your CSV. Steps 1 to 5 are the same for all three.
+1. A **private copy** of this repository, the *trading* repository, with access for the place you chose: the Claude
+   GitHub app for Claude, ChatGPT's GitHub connection (with write) for ChatGPT in the cloud, nothing on your own computer.
 2. Deny rules for the key folders, then the **bot wallet** as an encrypted keystore with a text password
    (`cast wallet new ~/.foundry/keystores r3-bot` or `cast wallet import r3-bot --interactive`), funded on Optimism.
 3. `routine.config.json`, `node r3.cjs install` (a first install stops and names the signer's `allowlist-init`), the
    allowlist copied to `setup/` with its sha256, `install` again, and the key files on your computer.
-4. Your CSV, then the **first real run, supervised**: a "yes" before each batch, then the first question and the signer
-   self-test.
+4. Your CSV, the first question and the signer self-test. Nothing is traded during setup: the first trade is the
+   first run where you chose (a trade now, below).
 5. Push your private copy (`run/` included, never the lock).
 6. The **cloud environment** `r3-trade` on claude.ai: a network allowlist and four variables, the key as the
    keystore's text in single quotes, `R3_KEYSTORE_JSON='{...}'`, never the raw private key.
 7. The **trading routine**, pinned to your commit's tree fingerprint and created with Claude Code's `/schedule` so its
    tool lists are set, then its **setup run**: a Run now of it with a setup prompt and two extra tools.
 8. Record the setup run in the setup record, give the routine back its trading prompt and tools, answer the second
-   question, turn the routine on.
+   question. Then you turn the routine on when you choose (its **Run now** trades at once).
 
-   With Codex instead of steps 6 to 8: a Codex scheduled task on your own computer (it must be on, with the ChatGPT
-   app open, at run times), its permissions, a no-send clearance on that computer, the second question, and one run by
-   hand (SETUP.md, "6 to 8 with Codex instead").
-9. Check the first scheduled run.
+   With ChatGPT in the cloud instead of steps 6 to 8: a Codex cloud environment holding the key, a setup run that must
+   push its records (a cloud that cannot push cannot run the bot), the second question, and a schedule you switch on
+   (SETUP.md, "6 to 8 with ChatGPT in the cloud"; untested with this bot until that setup run passes).
+
+   With ChatGPT on your own computer instead: a Codex scheduled task (the computer must be on, with the ChatGPT app
+   open, at run times), its permissions, a no-send clearance on that computer, the second question, and the task you
+   switch on (SETUP.md, "6 to 8 with Codex instead").
+9. Check a run; trade now whenever you like.
 
 SETUP.md also has a troubleshooting table and what another cloud (Codex, GitHub Actions) must provide.
 `steps/I-setup.md` is the full version of steps 2 to 8: I.1 for the wallet, I.2 §1 and I.1 §7 for the questions and
@@ -184,8 +192,10 @@ the self-test, I.2 §7 for the repository, the routine and the setup run.
   changed signer also needs the self-test's pass and the second question again (`steps/I-setup.md` I.2 §1). Commit
   `run/`, then put the new commit's tree fingerprint in the trading routine's prompt and in its pin-check tool entry
   (with `/schedule update` in Claude Code: the claude.ai form changes the prompt, not the tool lists). Until you do,
-  the trading run stops at its pin check. With a Codex scheduled task, there is no setup run: SETUP.md, *Afterwards,
-  with Codex*.
+  the trading run stops at its pin check. With ChatGPT in the cloud: a new CC2 setup run and the new tree in the
+  schedule's prompt (SETUP.md step 9). With a Codex scheduled task on your computer, there is no setup run: SETUP.md,
+  *Afterwards, with Codex*. **The first time you move to this version** (from `84dbb5d` or older), runs of the old code
+  take no repository lock: re-pin only while no run of the routine is live, and check again before the first trade now.
 - **Update from an install made before 25 Oct 2026:** delete `forecastImport`, `planner.forecastMethod` and
   `planner.forecastMaxAgeHours` from your `routine.config.json`. The forecast-file method and its research routine
   were removed from the base skill; `install`, `trade` and `clearance` refuse a config that still holds those keys and
@@ -195,11 +205,19 @@ the self-test, I.2 §7 for the repository, the routine and the setup run.
   stops new runs from getting the key. It does not reach a past run: its VM pauses with its files saved, the key files
   `install` wrote among them, and continuing its session restores it. Never continue a trading run's session. With a
   Codex scheduled task: pause it in the app, and set the field in the clone on that computer; a push does not reach
-  it, because it never pulls.
-- **A supervised send from your own machine:** pause the trading routine (or the Codex task) first and make sure no
-  run is live.
-  `r3.cjs`'s lock lives in one clone, so it does not stop a cloud run and a local session from sending at once. For
-  the same reason, never Run now while a scheduled run is live.
+  it, because it never pulls. With ChatGPT in the cloud: pause the schedule in ChatGPT, or push the field (each task
+  fetches it before trading); removing the two variables does not reach past tasks, whose saved files keep the key
+  files for up to 7 days, so archive or delete them too.
+- **Trade now:** the trading routine's **Run now** at claude.ai/code/routines (or ask Claude Code: `/schedule run`);
+  with ChatGPT, start the trading prompt by hand in your Codex cloud environment, press the Codex task's **Run now**, or
+  schedule the same prompt once, one minute from now.
+  It is the scheduled run started by hand. If a run is live, the new one stops at once (`lock-held`) and does nothing:
+  each cloud run takes a lock in your private copy (`run/.repo-lock.deep-r3-trade.json`) before it trades and removes
+  it at its end (SETUP.md step 9).
+- **A supervised send from your own machine:** pause the trading routine (or the Codex task's schedule) first and
+  make sure no run is live: `git pull`, then `node r3.cjs status` shows `repo_lock` null or expired, and claude.ai (or
+  ChatGPT) shows no running session. `r3.cjs`'s locks keep its own runs apart, not a supervised session: they do not
+  stop a cloud run and a local session from sending at once.
 - **Status of the book** (read-only): `node tools/r3-status.cjs run/<run-id> <from-block>`.
 - **Tests**, from `.claude/skills/deep-r3-trade/scripts/`, with `NODE_PATH` pointing at a `node_modules` folder that
   holds `ethers` 6.17.0. The planner suite takes 50 to 120 minutes. The signer and chain helper suites are
@@ -219,7 +237,7 @@ the self-test, I.2 §7 for the repository, the routine and the setup run.
   goes to a classifier instead of being refused, and a `Read` deny rule does not cover what a shell command reads. The
   trading environment's network allowlist does not stop a leaked key from being used either: the allowed RPC can
   broadcast a transfer signed with a leaked key. What protects the key: who can push to the trading repository (only
-  you and the trading routine) and what loads at session start; the code pin; the narrow tool lists and their deny
+  you and the trading routine, or a Codex cloud task in its place) and what loads at session start; the code pin; the narrow tool lists and their deny
   rules; auto mode's classifier; `r3.cjs`'s refusals; the agent's instructions; your claude.ai and GitHub accounts,
   which hold the prompt with the pin, the tool lists and the readable environment; and `ethers` 6.17.0 and its
   dependencies from the npm registry, which the signer loads with the key. The signer's allowlist bounds what the

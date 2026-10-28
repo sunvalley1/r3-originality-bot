@@ -417,26 +417,37 @@ async function runHelper(cfg, args, { retries = DEFAULT_RETRIES, log } = {}) {
   }
 }
 
-// The signer's restricted subcommands only. `info`, `reconcile`, `clear-nonce`, `sweep-*` and `allowlist-init` are
-// supervised entry points and are never run by the planner. `send` is never timed out (the signer has its own receipt
-// timeout; a killed send would leave its broadcast state unknown). A signer throttle (I-setup.md I.2 section 7, Rate
-// limits) is a non-zero exit whose JSON has `error` rpc-error, rpc-http or rpc-transport, no "simulated":true, and
-// rate-limit text in `detail`; it is re-run like the helper's: a `simulate`, and a `send` only when that attempt printed
-// no `broadcast` line and says signed:false, broadcast:false (nothing signed, nothing sent). `check` makes no RPC call.
-const SIGNER_SUBS = new Set(['check', 'simulate', 'send']);
+// The signer's restricted subcommands, plus two supervised entry points that only a scheduled run starts, neither of
+// which moves funds (exec-core: a stuck nonce cleared by the run itself, G section 8 Nonce pinning): `clear-nonce <n>`,
+// a zero-value transaction to the owner pinned in the signer's config, and `reconcile`, the signer's own release of a
+// settled send's lock. `info`, `sweep-*` and `allowlist-init` are supervised entry points and are never run by the
+// planner. `send` and `clear-nonce` are never timed out (the signer has its own receipt timeout; a killed send would
+// leave its broadcast state unknown). A signer throttle (I-setup.md I.2 section 7, Rate limits) is a non-zero exit whose
+// JSON has `error` rpc-error, rpc-http or rpc-transport, no "simulated":true, and rate-limit text in `detail`; it is
+// re-run like the helper's: a `simulate` or `reconcile`, and a `send` or `clear-nonce` only when that attempt printed no
+// `broadcast` line and says signed:false, broadcast:false (nothing signed, nothing sent). `check` makes no RPC call.
+const SIGNER_SUBS = new Set(['check', 'simulate', 'send', 'clear-nonce', 'reconcile']);
+const SIGNER_SENDS = new Set(['send', 'clear-nonce']);
 const SIGNER_RPC_ERRORS = new Set(['rpc-error', 'rpc-http', 'rpc-transport']);
 function signerThrottled(sub, code, last, lines) {
   if (code === 0 || !last || last.simulated === true || !SIGNER_RPC_ERRORS.has(last.error) || !RATE_LIMIT_TEXT.test(String(last.detail || ''))) return false;
-  if (sub === 'send') return last.signed === false && last.broadcast === false && !lines.some((j) => j && (j.event === 'broadcast' || j.hash));
-  return sub === 'simulate';
+  if (SIGNER_SENDS.has(sub)) return last.signed === false && last.broadcast === false && !lines.some((j) => j && (j.event === 'broadcast' || j.hash));
+  return sub === 'simulate' || sub === 'reconcile';
 }
 async function runSigner(cfg, sub, file, extra = [], { onLine, env, retries = 0, log } = {}) {
-  if (!SIGNER_SUBS.has(sub)) throw new PlannerError('internal', `the planner runs only the signer's check, simulate and send (not ${clip(sub, 20)})`, EXIT.INTERNAL);
-  if (typeof file !== 'string') throw new PlannerError('internal', 'signer file argument missing', EXIT.INTERNAL);
-  parseRunRel(file); // the input file is always a confined run/<run-id>/<file>
+  if (!SIGNER_SUBS.has(sub)) throw new PlannerError('internal', `the planner runs only the signer's check, simulate, send, clear-nonce and reconcile (not ${clip(sub, 20)})`, EXIT.INTERNAL);
   if (!Array.isArray(extra) || extra.some((a) => typeof a !== 'string')) throw new PlannerError('internal', 'signer arguments must be strings', EXIT.INTERNAL);
-  if (sub !== 'send' && extra.length) throw new PlannerError('internal', `signer ${sub} takes only its file`, EXIT.INTERNAL);
-  if (sub === 'send' && !(extra.length === 0 || (extra.length === 2 && extra[0] === '--nonce' && /^(0|[1-9][0-9]{0,15})$/.test(extra[1])))) throw new PlannerError('internal', 'signer send takes only --nonce <n>', EXIT.INTERNAL);
+  if (sub === 'reconcile') {
+    if ((file !== null && file !== undefined) || extra.length) throw new PlannerError('internal', 'signer reconcile takes no argument', EXIT.INTERNAL);
+  } else if (sub === 'clear-nonce') {
+    if (typeof file !== 'string' || !/^(0|[1-9][0-9]{0,15})$/.test(file) || extra.length) throw new PlannerError('internal', 'signer clear-nonce takes only a nonce', EXIT.INTERNAL);
+  } else {
+    if (typeof file !== 'string') throw new PlannerError('internal', 'signer file argument missing', EXIT.INTERNAL);
+    parseRunRel(file); // the input file is always a confined run/<run-id>/<file>
+    if (sub !== 'send' && extra.length) throw new PlannerError('internal', `signer ${sub} takes only its file`, EXIT.INTERNAL);
+    if (sub === 'send' && !(extra.length === 0 || (extra.length === 2 && extra[0] === '--nonce' && /^(0|[1-9][0-9]{0,15})$/.test(extra[1])))) throw new PlannerError('internal', 'signer send takes only --nonce <n>', EXIT.INTERNAL);
+  }
+  const args = sub === 'reconcile' ? [sub] : [sub, file, ...extra];
   const maxRetries = sub === 'check' ? 0 : retries;
   let attempt = 0;
   for (;;) {
@@ -445,7 +456,7 @@ async function runSigner(cfg, sub, file, extra = [], { onLine, env, retries = 0,
     const cb = (line) => { let j = null; try { j = JSON.parse(line); } catch (e) { /* not json */ } lines.push(j); if (onLine) onLine(line, j); };
     await acquire(cfg);
     let r;
-    try { stats.signerCalls++; r = await spawnNode(cfg, cfg.signerPath, [sub, file, ...extra], { onLine: cb, env, timeoutMs: sub === 'send' ? 0 : HELPER_TIMEOUT_MS }); } finally { release(); }
+    try { stats.signerCalls++; r = await spawnNode(cfg, cfg.signerPath, args, { onLine: cb, env, timeoutMs: SIGNER_SENDS.has(sub) ? 0 : HELPER_TIMEOUT_MS }); } finally { release(); }
     const last = lastJson(r.stdout);
     const rateLimited = !r.timedOut && signerThrottled(sub, r.code, last, lines);
     if (rateLimited && attempt <= maxRetries) {

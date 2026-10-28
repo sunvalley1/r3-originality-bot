@@ -682,10 +682,36 @@ path and hash, `false` otherwise and again after any signer change; the run read
 never infers it from the interface. It matters only after a Not-sent finding at latest == pending == `n`
 (step 4): a pinning signer proceeds, and signs the first send after it at `n` exactly (if the account nonce
 has moved, that send fails and the run settles again); a signer that cannot pin the nonce, atomic or not,
-sends no replacement: it stops sending, writes `wake-status.json` `aborted` with the hash and nonce in its
-`notes`, keeps it `aborted` at the end of the run, reports it in `report.md`, and the next run re-settles
-(`I-setup.md` I.2 §6 says how an operator clears a stuck nonce). A foreign transaction mined at `n` spends
-it and is not subject to this: the next send uses the current nonce on any signer (step 4).
+sends no replacement. **A scheduled run then consumes `n` itself** (the planner, inside the wrapper; a
+supervised session leaves it to the person, and a clearance, the signer self-test and `exec --check` send
+nothing): the signer's `clear-nonce <n>`, a zero-value transaction to the `owner` pinned in the signer's own
+config (it takes no destination), signed at exactly `n` with a doubled fee. It is the one transaction the
+planner has the signer send off the allowlist, and it moves no funds. It has no `inflight.json` or
+`nonce-attempts.json` entry, so step 4 judges it a foreign transaction, and its line in the signer's own log is
+never an attempt of the group; it takes no whole-sequence `eth_simulateV1`: the signer itself simulates it
+(`eth_call`), applies its ETH up-front rule and checks the signed bytes. Exactly one transaction can land at
+`n`, so the old one can never land after the cancel and nothing is traded twice. The run that made the
+finding (an unclear send) reads `n` again 60 seconds later and cancels if it still reads Not sent; a finding
+met while settling a stop's open attempt (a stop in `exec`, Half B, the PSM3 ramp or a recovery) is not
+cancelled in that run, and the next run's start-of-run repair cancels a prior run-id's Not-sent nonce at once.
+Each finding gets up to two `clear-nonce` calls, 20 seconds apart, the second only while `n` still reads Not
+sent (a second cancel can only replace the first), and no cancel is started with under 5 minutes left before
+the run's deadline or once the lock `./run/.lock.deep-r3-trade` is no longer the run's. `n` is then settled
+again from chain state: the mined cancel is a foreign transaction, so `n` settles Not sent and the run goes on
+(the half-done group gets the recovery rule); an old transaction that landed first (the cancel meets
+`nonce-too-low`) settles as Landed. Each call is recorded in the `nonce-cancels.json` of the run-id whose
+`inflight.json` holds `n`, written before the call (`started`) and completed after it (`confirmed`,
+`unconfirmed` or `refused`). Once an unclear send's nonce is settled for good (Landed, or Not sent with a
+foreign transaction), the scheduled run starts the signer's own `reconcile`, which sends nothing and releases
+the send-lock that send left, so the run's later sends are not refused (`../scripts/signer.README.md`,
+*Send-lock*); the start-of-run repair runs it too, once every nonce is settled and nothing blocks sends, for a
+lock an earlier run left (a signer whose state folder outlives the run), and a lock it keeps
+(`pending-or-unsent`, `in-progress`, `lock-unreadable`) blocks every send of that run. If no cancel could be
+sent or none was mined, the stuck state stays: the run stops sending, writes `wake-status.json` `aborted`
+with the hash and nonce in its `notes`, keeps it `aborted` at the end of the run, reports it in `report.md`,
+and the next run re-settles and cancels again (`I-setup.md` I.2 §6 says how an operator clears a stuck nonce
+by hand). A foreign transaction mined at `n` spends it and is not subject to this: the next send uses the
+current nonce on any signer (step 4).
 
 **Gas limits; this paragraph is the one place the rule is written.** Each transaction's gas limit is
 `ceil(maxUsedGas × 1.2)`, taken from that transaction's own call in the ordered `eth_simulateV1` result
@@ -773,14 +799,16 @@ never an input to this gate.
 approval of a plan, not per-transaction signing, and every batch needs one. In **autonomous mode** (the
 scheduled run, `I-setup.md` §I.2) the run builds its plan and sends it in the same run-id with no
 per-batch "yes" — only when `./run/setup.deep-r3-trade.json` carries `autonomy.enabled: true` with
-`authorized_at` and `signer_selftest_passed_at` set, `first_successful_run` is not null and
+`authorized_at` and `signer_selftest_passed_at` set and
 `schedule.signer_allow_rule_added_at` set; otherwise it
 sends nothing. That standing authorization replaces the "yes" and nothing else. Every autonomous send still
 takes the whole-sequence `eth_simulateV1` immediately before sending (a group with any `status` other than
 `0x1` is not sent: the plan is stale — one rule, below), the floors, a fresh `slot0` and the trading-boundary read immediately before it (§3),
 the pre-send gas check (above), `inflight.json` before its broadcast, never a re-send (§1), and, on a non-atomic signer, the recovery rule
-below. The scheduled run uses the signer through the operator's signing process only; the agent never
-reads, prints or asks for a key.
+below. The run's own cancel of a stuck nonce (the *Nonce pinning* paragraph above) is not such a send: it
+takes no whole-sequence `eth_simulateV1`, no `inflight.json` and no allowlist; the signer simulates it itself
+and sends it only to the pinned `owner`. The scheduled run uses the signer through the operator's signing
+process only; the agent never reads, prints or asks for a key.
 
 **A failing pre-send simulation — one rule.** A `status` other than `0x1` in a group makes the plan
 stale. **Before the run's first broadcast**, re-run F and re-simulate **once**; if the rebuilt plan fails
@@ -810,7 +838,11 @@ distinct allowlist refusal before signing. Every restricted subcommand the plann
 authorization, and never prints signed transaction bytes; no mode-switch (`I-setup.md` I.1 §7 defines it)
 switches any of this off. Off-allowlist actions in supervised mode (`I-setup.md` I.1 §5's exit to the
 human's own address, the sweep) go through a separate entry point that the planner never starts and only a
-supervised session runs, so each one prompts the human in Claude Code. The
+supervised session runs, so each one prompts the human in Claude Code. The one exception is a scheduled run's
+own cancel of a stuck nonce: inside the wrapper the planner also starts the signer's `clear-nonce <n>`, a
+zero-value transaction to the pinned `owner` that moves no funds, and its `reconcile`, which sends nothing
+(the *Nonce pinning* paragraph above); every other entry point (`info`, the sweeps, `allowlist-init`) it
+refuses before any process starts. The
 98×3 DOWN, UP and child-Invalid addresses and the 196 swap fee tiers are derived and pinned when the operator
 builds the signer's allowlist, from onchain reads, never from the data function or any other fetched body
 (`I-setup.md` I.1 §7 has the derivation, the tier rule and the builder). That
@@ -862,7 +894,9 @@ never writes key-handling code to fill the gap.
        (nonce, hash) only, and only if its `at` is not earlier than the start of the run-id whose attempt is
        being matched (that run-id's own `started_at` where its `wake-status.json` records one, else the UTC minute
        its run-id slug names, a `-w2` suffix ignored), so a log that outlives a chain instance cannot mark
-       another instance's transactions as Landed. The same scope applies wherever a log line is read for a
+       another instance's transactions as Landed. A line of the run's own cancel in that log (the signer's
+       `clear-nonce`, a zero-value transaction to the `owner`: the *Nonce pinning* paragraph above) is never
+       matched as the group's transaction: that transaction is a foreign transaction. The same scope applies wherever a log line is read for a
        `tx_hash`, matched there on (nonce, `input_hash`). Its input hash is the `input_keccak256` that the chain helper prints
        for it, from `tx <hash> <run-id>` or `block <n> <from_address>` (`I-setup.md` I.2 §7; both also print the
        `to` that is compared); the run never holds or hashes the input itself. So a same-input replacement under another hash, a fee bump or a speed-up,
@@ -873,7 +907,7 @@ never writes key-handling code to fill the gap.
        at `n` but its `input` cannot be read (a transport or RPC error: unconfirmed, not failed, readable
        on a later attempt), or an attempt with a `null` `calldata_hash` cannot be excluded (under Not sent,
        below). Only this and a not-sent
-       finding on a signer that cannot pin the nonce (the *Nonce pinning* paragraph above) block sending: build **no** recovery, stop sending, write `wake-status.json` `aborted` with the hash and
+       finding on a signer that cannot pin the nonce that no cancel has consumed (a scheduled run sends its own: the *Nonce pinning* paragraph above) block sending: build **no** recovery, stop sending, write `wake-status.json` `aborted` with the hash and
        nonce in its `notes` (a supervised session writes none: its unsettled `inflight.json` already marks
        the run-id as not final) — the end-of-run write keeps `aborted`, so the next run's start-of-run repair
        (*Runs that die mid-way*, below) picks it up.
@@ -941,7 +975,7 @@ never writes key-handling code to fill the gap.
   starts and overwritten with the final status at the end (`I-setup.md` §I.2) — or left `aborted`, which
   the start-of-run repair treats as non-final, in the cases `I-setup.md` I.2 §6 (a) lists: a nonce left pending
   (step 4, or an unconfirmed atomic send, below), a signer that cannot pin the nonce stopped at a not-sent finding
-  (the *Nonce pinning* paragraph, signer requirements above), a held send-lock, or a group of the entry plan left half-done.
+  that no cancel consumed (the *Nonce pinning* paragraph, signer requirements above), a held send-lock, or a group of the entry plan left half-done.
   **Final** and **non-final**, here and wherever another file says "still `aborted`", are defined once, in
   `I-setup.md` I.2 §6 (*Runs that die mid-way*); only a prior run-id that is not final is repaired or held back
   from H.
@@ -1082,7 +1116,7 @@ and is re-run: `I-setup.md` I.2 §7, *Rate limits*). If a send returns a hash yo
 and reconcile from chain state; do not resend. It is unconfirmed, not failed (sequential step 4), on any
 signer, atomic included: settle its nonce by step 4's three outcomes (landed, pending, not sent; no
 timeout). Only while it is pending (a `null` `calldata_hash` that cannot be excluded included, or after a
-not-sent finding on a signer that cannot pin the nonce, the *Nonce pinning* paragraph above), stop sending, write
+not-sent finding on a signer that cannot pin the nonce that no cancel consumed, the *Nonce pinning* paragraph above), stop sending, write
 `wake-status.json` `aborted` with the hash and nonce in its `notes`, keep it `aborted` at the end of the
 run, and leave it to the next run's start-of-run repair (*Runs that die mid-way*, above).
 
@@ -1298,8 +1332,8 @@ repo token of this run's own (`m_X − (S_j − r_j)⁺`, up to 98 entries: `m_X
 would count the held tokens again; plus a `set-sell`'s proceeds and a `merge-arb`'s returned `q`,
 which are not recycled in the same run), each middle Invalid (`m_X` of it, not `M`), the parent Invalid, any unsplit bundle
 tokens, and any child Invalid a `complex-buy` or `set-sell` split minted (a `set-sell` keeps its `q`) —
-without that, `I-setup.md` I.2's green-run
-check (iii) cannot reconcile. Every such child Invalid is never sold and never merged unless step 4 or
+without that, H cannot net the sets a market holds, and a supervised reconciliation of the holder's balances
+against `fills.json` does not add up. Every such child Invalid is never sold and never merged unless step 4 or
 a later run's `merge-arb` consumes it, and Invalid is what bounds every merge at all three levels.
 H derives each market's net set count from it. Record amounts in the unit each token is denominated in
 and say which. **One entry per token:** `retained_legs` holds exactly one entry for each token address, its `amount` the sum of what every

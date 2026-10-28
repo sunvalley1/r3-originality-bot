@@ -15,8 +15,8 @@
 // group goes through exec-core, the one sending path: the time budget, affordability, the nonce, the file and its hash,
 // the signer's own simulate and the three-part gas check, inflight.json and the attempt under this run-id before the
 // broadcast, one `send`, the receipt. The ramp is the run's first broadcast: exec then counts it (anySent), so a later
-// failing simulation skips instead of re-planning (G section 1). It is not a fills.json row; its record for the
-// green-run reconciliation (I-setup.md I.2 section 1 (iii)) is ./run/<run-id>/ramp.json (amounts, quotes, the tx hashes,
+// failing simulation skips instead of re-planning (G section 1). It is not a fills.json row; its record for
+// reconciling the holder's balances (H, and a supervised check against fills.json) is ./run/<run-id>/ramp.json (amounts, quotes, the tx hashes,
 // receipts' blocks and gas, sUSDS before and after), and every send is in exec-sends.json with source "ramp".
 // A stop (stale simulation, refusal, capacity, affordability, time budget, a Pending or unclear nonce) ends Half A
 // before F; a nonce left unsettled keeps the wake aborted (keep_aborted).

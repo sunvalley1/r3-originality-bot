@@ -1,7 +1,7 @@
 // planner/report.cjs - `planner report <run-id>`: ./run/<run-id>/report.md from the run's artifacts (I-setup.md I.2
 // section 4): what was sent (tx hashes), what was skipped and why, balances before and after, Half B, the answer watch,
 // the markets decided but unreported, and the P&L so far from H, one line per run-id of this arm ("<run-id>: nothing
-// settled yet" when H ran on it and found nothing settled, I.2 section 1 (iv)). Inside a wake (opts.wake, never from the
+// settled yet" when H ran on it and found nothing settled, I.2 section 4). Inside a wake (opts.wake, never from the
 // command line) it also writes the final wake-status.json; run alone it writes report.md only and never touches a
 // wake-status.json. Reads files only; no chain read, no send.
 'use strict';

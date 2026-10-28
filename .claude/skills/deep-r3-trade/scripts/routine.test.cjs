@@ -28,7 +28,10 @@
  * nothing signed or sent.
  *
  * Sections (--only takes any of them): install, passthrough, clearance, gates, selftest, git.
- * The git section waits for one 20-second checkpoint (its four runs go in parallel), so it takes about half a minute.
+ * The git section waits for one 20-second checkpoint (its four runs go in parallel), then tries the repository lock
+ * that trade --push takes: another run's lock, an expired or unreadable one, two runs that start together (a pre-push
+ * hook makes the race), a lock push that landed but reported an error, a commit outside run/ on origin, a time limit
+ * raised on origin, a detached HEAD and a committed arm lock.
  * Three cases guard bugs these tests found in routine.cjs on 2026-10-23 (their comments say what went wrong): a key
  * variable spelled in another case on Windows, a lock left behind when the run-id was taken, and a final rebase on a
  * machine with no git identity.
@@ -103,6 +106,25 @@ function stubPlanner(STUB) {
       }
     };
     const started = new Date().toISOString();
+    // trade --push pulls before the wake (the repository lock); no fetch or pull may run while the wake lasts
+    const fetchHead = () => { try { return fs.statSync(path.join(root, '.git', 'FETCH_HEAD')).mtimeMs; } catch (e) { return null; } };
+    const fetchHeadAtStart = fetchHead();
+    // plan.foreignPush ({ dir, kind, file }): a second clone pushes while this wake lasts. Made here, after the run's
+    // repository lock and before any checkpoint or the final push, so the order the git cases need holds by
+    // construction; with its own identity, since the no-identity case's git config has none
+    if (plan.foreignPush) {
+      const fp = plan.foreignPush; const id = ['-c', 'user.name=other clone', '-c', 'user.email=other-clone@localhost'];
+      const g2 = (args) => cp.spawnSync('git', [...id, ...args], { cwd: fp.dir, encoding: 'utf8', windowsHide: true }).status === 0;
+      let pushed = g2(['pull', '-q', '--ff-only', 'origin', 'main']);
+      if (pushed) {
+        if (fp.kind === 'log') fs.appendFileSync(path.join(fp.dir, 'run', 'wake-deep-r3.log'), 'a line another clone wrote\n');
+        else fs.writeFileSync(path.join(fp.dir, fp.file), 'pushed by another clone while the run lasts\n');
+        pushed = g2(['add', '-f', fp.kind === 'log' ? 'run/wake-deep-r3.log' : fp.file])
+          && g2(['commit', '-q', '-m', fp.kind === 'log' ? 'other clone: run/wake-deep-r3.log' : 'other clone: a commit pushed while the run lasts'])
+          && g2(['push', '-q', 'origin', 'HEAD:main']);
+      }
+      rec({ kind: 'foreign-push', at: new Date().toISOString(), rid, ok: pushed });
+    }
     put('planner/c.json', JSON.stringify({ step: 'c', at: started }) + '\n');
     put('candidates.json', JSON.stringify({ stub: true, rows: 98 }) + '\n');
     for (const t of ['exec-tmp', 'f-tmp', 'g-tmp', 'halfb-tmp', 'recovery-tmp']) put(`${t}/scratch.json`, JSON.stringify({ scratch: t }) + '\n');
@@ -115,9 +137,12 @@ function stubPlanner(STUB) {
     verify('at the end');
     const g = (args) => { const r = cp.spawnSync('git', args, { cwd: root, encoding: 'utf8', windowsHide: true }); return r.status === 0 ? String(r.stdout).trim().split(/\r?\n/).filter(Boolean) : null; };
     rec({ kind: 'wake-end', at: new Date().toISOString(), rid, ticks: n, violations, notes, files: [...mine.keys()].sort(),
-      fetch_head: fs.existsSync(path.join(root, '.git', 'FETCH_HEAD')),
+      fetch_head_moved: fetchHead() !== fetchHeadAtStart,
+      repo_lock_in_tree: fs.existsSync(path.join(root, 'run', '.repo-lock.deep-r3-trade.json')),
+      repo_lock_text: (() => { try { return fs.readFileSync(path.join(root, 'run', '.repo-lock.deep-r3-trade.json'), 'utf8'); } catch (e) { return null; } })(),
       local_log: plan.gitLogs ? g(['log', '--format=%s']) : null,
-      origin_log: plan.gitLogs && plan.originDir ? g(['--git-dir', plan.originDir, 'log', '--format=%s', 'main']) : null });
+      origin_log: plan.gitLogs && plan.originDir ? g(['--git-dir', plan.originDir, 'log', '--format=%s', 'main']) : null,
+      origin_lock: plan.gitLogs && plan.originDir ? g(['--git-dir', plan.originDir, 'ls-tree', '--name-only', 'main', '--', 'run/.repo-lock.deep-r3-trade.json']) : null });
     if (!plan.noFinalStatus) {
       put('report.md', `# stub report ${rid}\n`);
       fs.writeFileSync(path.join(dir, 'wake-status.json'), JSON.stringify({ run_id: rid, started_at: started, finished_at: new Date().toISOString(), status: plan.wakeStatus || 'completed', stopped_at_step: null, notes: 'stub wake' }, null, 2) + '\n');
@@ -491,10 +516,10 @@ async function gatesSection(W) {
   await test('trade: setup (install, the stub over the installed planner, a setup record pinning the signer and the stub)', async () => { P = await stubProject(W, 'gates'); });
   if (!P) return;
   const wakes = () => plannerCalls(P).filter((c) => c.argv[0] === 'wake').length;
-  await test('trade: both pins match -> the planner\'s wake runs once with the lock held for its run-id, without either key variable; exit 0; the lock released', async () => {
+  await test('trade: both pins match -> the planner\'s wake runs once with the lock held for its run-id; exit 0; the lock released', async () => {
     setPlan(P, { wakeSeconds: 1 });
     const n0 = wakes();
-    const r = await r3(W, P, ['trade'], { env: KEYS_ENV });
+    const r = await r3(W, P, ['trade']);
     try {
       ok(r.code === 0 && r.j.ok === true && r.j.exit === 0 && r.j.planner_exit === 0 && r.j.status === 'completed' && RID_RE.test(r.j.run_id), say(r));
       ok(wakes() === n0 + 1, 'wake did not run exactly once');
@@ -510,7 +535,7 @@ async function gatesSection(W) {
   // A cloud session sets CLAUDE_AUTOCOMPACT_PCT_OVERRIDE itself; its name trips the signer's environment tripwire, so
   // on 24 Oct 2026 G's check refused all 491 transactions of the first cloud clearance.
   await test('trade: Claude Code\'s own variables (CLAUDECODE, CLAUDE_*) never reach the planner\'s wake', async () => {
-    const r = await r3(W, P, ['trade'], { env: { ...KEYS_ENV, CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: '50', CLAUDECODE: '1', CLAUDE_CODE_ENTRYPOINT: 'remote' } });
+    const r = await r3(W, P, ['trade'], { env: { CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: '50', CLAUDECODE: '1', CLAUDE_CODE_ENTRYPOINT: 'remote' } });
     try {
       ok(r.code === 0 && r.j.status === 'completed', say(r));
       const c = plannerCalls(P).pop();
@@ -554,7 +579,7 @@ async function gatesSection(W) {
       setupRecord(P, over);
       const undo = alter ? alter() : null;
       const n0 = plannerCalls(P).length;
-      const r = await r3(W, P, ['trade'], { env: KEYS_ENV }).finally(() => { if (undo) undo(); });
+      const r = await r3(W, P, ['trade']).finally(() => { if (undo) undo(); });
       try {
         ok(r.code === 4 && r.j.ok === false && r.j.exit === 4 && r.j.status === 'aborted' && re.test(r.j.notes || ''), say(r));
         const ws = rj(path.join(P.run, r.j.run_id, 'wake-status.json'));
@@ -600,6 +625,16 @@ async function gatesSection(W) {
   // trade() picks the run-id before it takes the lock (newRunId throws "run-id ... is taken" when run/<slug> and
   // run/<slug>-w2 both exist), and anything that throws once the lock is taken releases it: a lock left with no
   // owner.txt would make every run on that machine skip as "lock held" until it is older than the time limit + 1 h.
+  // where the key lives in environment variables the run is a cloud one: without --push it would take no repository
+  // lock and its records would die with the clone
+  await test('trade without --push where a key variable is set -> exit 2, refused before anything runs: no lock, no wake', async () => {
+    const n0 = plannerCalls(P).length;
+    const r = await r3(W, P, ['trade'], { env: KEYS_ENV });
+    try {
+      ok(r.code === 2 && r.j.exit === 2 && /without --push where R3_KEYSTORE_JSON or R3_KEYSTORE_PASSWORD is set/.test(r.j.error || ''), say(r));
+      ok(plannerCalls(P).length === n0 && !exists(P.lock), 'the planner ran or a lock was left');
+    } finally { clearRuns(P); }
+  });
   await test('trade: when the run-id is taken (exit 2), the lock is not left behind', async () => {
     const made = [];
     for (const ms of [Date.now(), Date.now() + 60000]) for (const s of ['', '-w2']) { const d = path.join(P.run, slugAt(ms) + s); fs.mkdirSync(d, { recursive: true }); made.push(d); }
@@ -608,6 +643,46 @@ async function gatesSection(W) {
       ok(r.code === 2 && /is taken/.test(r.j.error || ''), say(r));
       ok(!exists(P.lock), `routine.cjs bug: the lock is left held (${listTree(P.lock).join(', ') || 'no owner.txt'}) after the run-id was refused`);
     } finally { rmrf(P.lock); for (const d of made) rmrf(d); clearRuns(P); }
+  });
+  // on the operator's own computer a Codex task's trade now shares the clone and the tool folders with the live run:
+  // its install must not rewrite the files that run is executing
+  await test('install while a live run of this clone holds the arm lock -> exit 2 lock-held, nothing rewritten (the stub planner stays)', async () => {
+    fs.mkdirSync(P.lock, { recursive: true });
+    fs.writeFileSync(path.join(P.lock, 'owner.txt'), JSON.stringify({ pid: process.pid, process_start_time: new Date(Date.now() - process.uptime() * 1000).toISOString(), host: os.hostname(), started_at: new Date().toISOString(), stage: 'claude-p', run_id: 'a-live-run' }));
+    const before = fs.readFileSync(P.plannerBin, 'utf8');
+    try {
+      const r = await r3(W, P, ['install']);
+      ok(r.code === 2 && r.j.exit === 2 && r.j.status === 'lock-held' && /run a-live-run/.test(r.j.error || ''), say(r));
+      ok(fs.readFileSync(P.plannerBin, 'utf8') === before, 'install rewrote the planner a live run is using');
+    } finally { rmrf(P.lock); }
+  });
+  // macOS and Linux record a supervised owner's start as ps's lstart text, which has no zone (taken with TZ=UTC): off UTC
+  // it must still read as this live process, or install rewrites the tools under a live supervised batch
+  await test('install under a live owner recorded in ps lstart form (no zone), the clock in Asia/Bangkok -> exit 2 lock-held, nothing rewritten', async () => {
+    const m = new Date(Date.now() - process.uptime() * 1000).toUTCString().match(/^(\w{3}), (\d\d) (\w{3}) (\d{4}) ([\d:]{8}) GMT$/);
+    const lstart = `${m[1]} ${m[3]} ${m[2]} ${m[5]} ${m[4]}`; // as `LC_ALL=C TZ=UTC ps -o lstart=` prints it
+    fs.mkdirSync(P.lock, { recursive: true });
+    fs.writeFileSync(path.join(P.lock, 'owner.txt'), JSON.stringify({ pid: process.pid, process_start_time: lstart, host: os.hostname(), started_at: new Date().toISOString(), stage: 'planner exec (supervised send batch)', run_id: 'a-supervised-run' }));
+    const before = fs.readFileSync(P.plannerBin, 'utf8');
+    try {
+      const r = await r3(W, P, ['install'], { env: { TZ: 'Asia/Bangkok' } });
+      ok(r.code === 2 && r.j.exit === 2 && r.j.status === 'lock-held' && /run a-supervised-run/.test(r.j.error || ''), `${lstart}: ${say(r)}`);
+      ok(fs.readFileSync(P.plannerBin, 'utf8') === before, 'install rewrote the planner under a live supervised batch');
+    } finally { rmrf(P.lock); }
+  });
+  // a lock folder whose owner file was never written (a crash between mkdir and the write): live while young, stale
+  // once older than the time limit + 1 h, or every later run of the task would stop at install for good
+  await test('install with an owner-less arm lock: younger than the time limit + 1 h -> exit 2 lock-held; two days old -> install goes on', async () => {
+    fs.mkdirSync(P.lock, { recursive: true });
+    const before = fs.readFileSync(P.plannerBin, 'utf8');
+    try {
+      const young = await r3(W, P, ['install']);
+      ok(young.code === 2 && young.j.status === 'lock-held' && /owner file unreadable/.test(young.j.error || ''), say(young));
+      ok(fs.readFileSync(P.plannerBin, 'utf8') === before, 'install rewrote the planner under a young lock');
+      const old = new Date(Date.now() - 172800000); fs.utimesSync(P.lock, old, old);
+      const r = await r3(W, P, ['install']);
+      ok(r.code === 0 && r.j.ok === true, `install refused a two-day-old owner-less lock: ${say(r)}`);
+    } finally { rmrf(P.lock); fs.writeFileSync(P.plannerBin, before); setupRecord(P); }
   });
 }
 
@@ -715,7 +790,7 @@ async function selftestSection(W) {
 async function gitSection(W) {
   const RECORD_EXCLUDED = /^run\/(\.lock\.deep-r3-trade\/|[^/]+\/(exec|f|g|halfb|recovery)-tmp\/)/;
   const FOREIGN = 'other-clone.txt';
-  const setupGit = async (name, plan) => {
+  const setupGit = async (name, plan, foreign) => {
     const P = await stubProject(W, name);
     P.origin = path.join(P.base, 'origin.git'); P.clone2 = path.join(P.base, 'clone2');
     fs.writeFileSync(path.join(P.proj, '.gitignore'), 'run/\n'); // as the real repository: run/ is ignored and added with -f
@@ -728,47 +803,39 @@ async function gitSection(W) {
     git(W, P.proj, ['remote', 'add', 'origin', P.origin]);
     git(W, P.proj, ['push', '-q', 'origin', 'HEAD:main']);
     git(W, P.base, ['clone', '-q', P.origin, P.clone2]);
-    setPlan(P, { gitLogs: true, originDir: P.origin, foreignFile: FOREIGN, ...plan });
+    setPlan(P, { gitLogs: true, originDir: P.origin, foreignFile: FOREIGN, ...(foreign ? { foreignPush: { dir: P.clone2, kind: foreign, file: FOREIGN } } : {}), ...plan });
     return P;
-  };
-  const pushForeign = (P, kind) => {
-    if (kind === 'log') fs.appendFileSync(path.join(P.clone2, 'run', 'wake-deep-r3.log'), 'a line another clone wrote\n');
-    else fs.writeFileSync(path.join(P.clone2, FOREIGN), 'pushed by another clone while the run lasts\n');
-    git(W, P.clone2, ['add', '-f', kind === 'log' ? 'run/wake-deep-r3.log' : FOREIGN]);
-    git(W, P.clone2, ['commit', '-q', '-m', kind === 'log' ? 'other clone: run/wake-deep-r3.log' : 'other clone: a commit pushed while the run lasts']);
-    git(W, P.clone2, ['push', '-q', 'origin', 'HEAD:main']);
   };
   const originLog = (P) => gitLines(W, P.base, ['--git-dir', P.origin, 'log', '--format=%s', 'main']);
   const originPaths = (P) => gitLines(W, P.base, ['--git-dir', P.origin, 'log', '--name-only', '--format=', 'main']);
   const originTree = (P) => gitLines(W, P.base, ['--git-dir', P.origin, 'ls-tree', '-r', '--name-only', 'main']);
   const originShow = (P, rel) => String(git(W, P.base, ['--git-dir', P.origin, 'show', `main:${rel}`]).stdout);
+  const LOCK_GIT = 'run/.repo-lock.deep-r3-trade.json';
+  const foreignPushed = (P, rid) => calls(P).find((c) => c.kind === 'foreign-push' && c.rid === rid) || null;
 
   let G = null;
   await test('git: setup (four throwaway projects, each with a bare origin and a second clone)', async () => {
     G = {
       normal: await setupGit('git-normal', { wakeSeconds: 28 }),
-      moved: await setupGit('git-moved', { wakeSeconds: 28 }),
-      conflict: await setupGit('git-conflict', { wakeSeconds: 1 }),
-      noident: await setupGit('git-noident', { wakeSeconds: 1 }),
+      moved: await setupGit('git-moved', { wakeSeconds: 28 }, 'file'),
+      conflict: await setupGit('git-conflict', { wakeSeconds: 2 }, 'log'),
+      noident: await setupGit('git-noident', { wakeSeconds: 2 }, 'file'),
     };
-    pushForeign(G.conflict, 'log'); // collides with the run's own log lines: the final pull --rebase must fail
-    pushForeign(G.noident, 'file');
   });
   if (!G) return;
-  // the four runs at once; the second clone pushes to git-moved's origin 3 s in, before its first checkpoint (20 s
-  // after its wake starts, so never before 20 s after t0)
-  const t0 = Date.now();
+  // the four runs at once. Each takes its repository lock before its wake; as git-moved's, git-conflict's and
+  // git-noident's wakes start, the second clone pushes to their origins (the stub's plan.foreignPush), before the
+  // first checkpoint (20 s after the wake starts) and before the final push: a file to git-moved and git-noident, a
+  // line of the run log to git-conflict, which collides with the run's own log lines, so its final pull --rebase must
+  // fail. git-normal runs with the key's variables set, as a cloud run does
   const R = {
-    normal: r3(W, G.normal, ['trade', '--push']),
+    normal: r3(W, G.normal, ['trade', '--push'], { env: KEYS_ENV }),
     moved: r3(W, G.moved, ['trade', '--push']),
     conflict: r3(W, G.conflict, ['trade', '--push']),
     noident: r3(W, G.noident, ['trade', '--push'], { env: { GIT_CONFIG_GLOBAL: W.gitNoId } }),
   };
-  await sleep(3000);
-  let movedAt = null; let movedErr = null;
-  try { pushForeign(G.moved, 'file'); movedAt = Date.now() - t0; } catch (e) { movedErr = e.message; }
   for (const k of Object.keys(R)) R[k] = await R[k];
-  console.log(`      (git runs: ${Object.entries(R).map(([k, r]) => `${k} ${Math.round(r.ms / 1000)} s`).join(', ')}; the other clone pushed ${movedAt === null ? 'NOT: ' + movedErr : Math.round(movedAt / 1000) + ' s'} in)`);
+  console.log(`      (git runs: ${Object.entries(R).map(([k, r]) => `${k} ${Math.round(r.ms / 1000)} s`).join(', ')}, started together)`);
 
   const checkpointCommit = (P, rid) => gitLines(W, P.base, ['--git-dir', P.origin, 'log', '--format=%H %s', 'main']).find((l) => l.endsWith(`records: run ${rid} in progress`));
   const commonFinal = (P, r, label) => {
@@ -787,6 +854,12 @@ async function gitSection(W) {
     const inCp = gitLines(W, P.base, ['--git-dir', P.origin, 'show', '--name-only', '--format=', cpc.split(' ')[0]]);
     ok(inCp.includes(`run/${rid}/candidates.json`) && inCp.includes(`run/${rid}/progress.txt`) && !inCp.some((p) => RECORD_EXCLUDED.test(p)), `${label}: the checkpoint commit holds ${clip(inCp)}`);
     ok(!exists(P.lock), `${label}: the lock was not released`);
+    // the repository lock: pushed before the wake, on origin while it lasted, removed by the final push
+    ok(log.indexOf(`lock: run ${rid} started`) > log.indexOf(`records: run ${rid} in progress`), `${label}: no lock commit before the run's records: ${clip(log)}`);
+    const end = wakeEnd(P, rid);
+    ok(end && sameList(end.origin_lock, [LOCK_GIT]) && end.repo_lock_in_tree === true, `${label}: the repository lock was not on origin and in the clone while the wake lasted: ${clip(end)}`);
+    ok(!tree.includes(LOCK_GIT) && !exists(path.join(P.run, '.repo-lock.deep-r3-trade.json')), `${label}: the final push left the repository lock`);
+    ok(r.j.repo_lock && r.j.repo_lock.run_id === rid && r.j.repo_lock.released === true, `${label}: repo_lock ${clip(r.j.repo_lock)}`);
     return rid;
   };
 
@@ -796,13 +869,15 @@ async function gitSection(W) {
     ok(sameList(end.violations, []), `files moved under the planner: ${clip(end.violations)}`);
     ok(Array.isArray(end.origin_log) && end.origin_log[0] === `records: run ${rid} in progress`, `origin at the wake's end: ${clip(end.origin_log)}`);
     ok(!/checkpoint not pushed/.test(fs.readFileSync(P.log, 'utf8')), 'a checkpoint was not pushed');
+    const w = plannerCalls(P).filter((c) => c.argv[0] === 'wake').pop();
+    ok(w && !w.env_keys.some((k) => /^R3_KEYSTORE_/i.test(k)) && w.env_keys.includes('R3TEST_MARKER'), `the wake got a key variable (or not the rest of the environment): ${clip(w && w.env_keys)}`);
   });
   await test('git: a checkpoint after origin moved does not pull: no fetch, the other clone\'s commit and file never reach the working tree mid-run, the planner\'s files never change under it; the log says it was deferred', async () => {
     const P = G.moved; const r = R.moved; const rid = r.j.run_id;
-    ok(movedAt !== null && movedAt < 19000, `the other clone's push was not in place before the first checkpoint (${movedAt} ms; ${movedErr || ''}): inconclusive`);
+    const fp = foreignPushed(P, rid); ok(fp && fp.ok, `the other clone's push did not land as the wake started: ${clip(fp)}`);
     const end = wakeEnd(P, rid); ok(end, `the stub wake recorded no end: ${say(r)}`);
     ok(sameList(end.violations, []), `files moved under the planner: ${clip(end.violations)}`);
-    ok(end.fetch_head === false, 'a fetch or pull ran during the wake (.git/FETCH_HEAD exists)');
+    ok(end.fetch_head_moved === false, 'a fetch or pull ran during the wake (.git/FETCH_HEAD changed)');
     ok(Array.isArray(end.local_log) && Array.isArray(end.origin_log), `the stub could not read git: ${clip(end)}`);
     ok(end.local_log.includes(`records: run ${rid} in progress`), `the checkpoint did not commit: local log ${clip(end.local_log)}`);
     ok(!end.local_log.includes('other clone: a commit pushed while the run lasts'), `the other clone's commit was pulled mid-run: ${clip(end.local_log)}`);
@@ -817,7 +892,9 @@ async function gitSection(W) {
   });
   await test('git: a final pull --rebase that fails (a conflict on run/wake-deep-r3.log) is aborted: pushed false with the error, no rebase left in progress, the records committed locally, origin unchanged', async () => {
     const P = G.conflict; const r = R.conflict; const rid = r.j.run_id;
+    const fp = foreignPushed(P, rid); ok(fp && fp.ok, `the other clone did not push while the run lasted: ${clip(fp)}`);
     ok(r.code === 0 && r.j.status === 'completed' && RID_RE.test(rid || ''), say(r));
+    ok(r.j.repo_lock && r.j.repo_lock.released === false && /still on origin until/.test(r.j.repo_lock.note || '') && originTree(P).includes(LOCK_GIT), `a failed final push must say the repository lock stays on origin: ${clip(r.j.repo_lock)}`);
     ok(r.j.pushed && r.j.pushed.pushed === false && /^pull --rebase failed/.test(r.j.pushed.error || ''), `pushed ${clip(r.j.pushed)}`);
     ok(!exists(path.join(P.proj, '.git', 'rebase-merge')) && !exists(path.join(P.proj, '.git', 'rebase-apply')), 'a rebase is left in progress');
     ok(String(git(W, P.proj, ['status', '--porcelain', '--untracked-files=no']).stdout).trim() === '', 'tracked files are left modified or conflicted');
@@ -833,10 +910,193 @@ async function gitSection(W) {
   // pushed at all.
   await test('git: the final pull --rebase works on a machine with no git identity (routine.config.json\'s git name and email, as the commit uses)', async () => {
     const P = G.noident; const r = R.noident;
+    const fp = foreignPushed(P, r.j.run_id); ok(fp && fp.ok, `the other clone did not push while the run lasted: ${clip(fp)}`);
     ok(r.code === 0 && r.j.status === 'completed', say(r));
     ok(!exists(path.join(P.proj, '.git', 'rebase-merge')) && !exists(path.join(P.proj, '.git', 'rebase-apply')), 'a rebase is left in progress');
     ok(r.j.pushed && r.j.pushed.pushed === true, `routine.cjs bug: the records were not pushed: ${clip(String(r.j.pushed && r.j.pushed.error).replace(/\s+/g, ' '), 300)}`);
-    ok(originLog(P)[0] === `records: run ${r.j.run_id} finished (completed), exit 0`, `origin ${clip(originLog(P))}`);
+    const log = originLog(P);
+    ok(log[0] === `records: run ${r.j.run_id} finished (completed), exit 0` && log.includes('other clone: a commit pushed while the run lasts'), `origin ${clip(log)}`);
+    ok(!originTree(P).includes(LOCK_GIT) && r.j.repo_lock && r.j.repo_lock.released === true, `the repository lock was left: ${clip(r.j.repo_lock)}`);
+  });
+
+  // ---- the repository lock against another run's (trade now while a run is live, two runs that start together)
+  const wakesIn = (P) => plannerCalls(P).filter((c) => c.argv[0] === 'wake').length;
+  const head = (cwd) => gitLines(W, cwd, ['rev-parse', 'HEAD'])[0];
+  const originHead = (P) => gitLines(W, P.base, ['--git-dir', P.origin, 'rev-parse', 'main'])[0];
+  // another run's lock, pushed from the second clone as that run would
+  const pushLock = (P, text, subject) => {
+    git(W, P.clone2, ['pull', '-q', '--ff-only', 'origin', 'main']);
+    fs.writeFileSync(path.join(P.clone2, LOCK_GIT), text);
+    git(W, P.clone2, ['add', '-f', LOCK_GIT]); git(W, P.clone2, ['commit', '-q', '-m', subject]); git(W, P.clone2, ['push', '-q', 'origin', 'HEAD:main']);
+  };
+  const lockText = (runId, expiresMs) => JSON.stringify({ run_id: runId, token: 'another-run', started_at: new Date(Date.now() - 600000).toISOString(), expires_at: new Date(expiresMs).toISOString(), host: 'another-cloud-run' }, null, 1) + '\n';
+  // a refused run: no wake, no arm lock left, no run-id, and nothing of its own on origin (the only lock commits there
+  // are the other run's)
+  const refusedCleanly = (P, r, n0, label, otherRun = null) => {
+    ok(wakesIn(P) === n0, `${label}: the planner's wake started`);
+    ok(!exists(P.lock), `${label}: the arm lock was left`);
+    const own = originLog(P).filter((s) => /^records: /.test(s) || (/^lock: run /.test(s) && s !== `lock: run ${otherRun} started`));
+    ok(!own.length, `${label}: this run pushed ${clip(own)}`);
+    ok(r.j.run_id === undefined && r.j.pushed === undefined, `${label}: a refused run has no run-id and pushes nothing: ${clip(r.j)}`);
+  };
+  await test('git: trade now while another run holds the repository lock -> exit 2 lock-held naming that run, the wake never starts, nothing pushed; status shows the lock', async () => {
+    const P = await setupGit('git-held', { wakeSeconds: 1 });
+    pushLock(P, lockText('2026-10-28T0430Z', Date.now() + 3 * 3600000), 'lock: run 2026-10-28T0430Z started');
+    const before = originHead(P); const n0 = wakesIn(P);
+    const r = await r3(W, P, ['trade', '--push']);
+    ok(r.code === 2 && r.j.exit === 2 && r.j.status === 'lock-held' && r.j.holder && r.j.holder.run_id === '2026-10-28T0430Z' && /holds the repository lock/.test(r.j.notes || ''), say(r));
+    refusedCleanly(P, r, n0, 'held', '2026-10-28T0430Z');
+    ok(originHead(P) === before && head(P.proj) === before, `origin moved, or this clone did not pull: ${clip(originLog(P))}`);
+    const s = await r3(W, P, ['status']);
+    ok(s.code === 0 && s.j.repo_lock && s.j.repo_lock.run_id === '2026-10-28T0430Z' && s.j.repo_lock.expired === false, `status: ${say(s)}`);
+  });
+  await test('git: an expired repository lock (a run that died) is replaced: the run trades, its lock commit names the old one, the final push removes it', async () => {
+    const P = await setupGit('git-expired', { wakeSeconds: 1 });
+    pushLock(P, lockText('2026-10-27T1430Z', Date.now() - 60000), 'lock: run 2026-10-27T1430Z started');
+    const r = await r3(W, P, ['trade', '--push']);
+    const rid = r.j.run_id;
+    ok(r.code === 0 && r.j.status === 'completed' && RID_RE.test(rid || ''), say(r));
+    ok(r.j.repo_lock && r.j.repo_lock.released === true, clip(r.j.repo_lock));
+    const log = originLog(P);
+    ok(log.some((s) => s.startsWith(`lock: run ${rid} started (the expired lock of run 2026-10-27T1430Z, started `) && s.endsWith(', replaced)')), `no lock commit naming the expired one: ${clip(log)}`);
+    ok(log[0] === `records: run ${rid} finished (completed), exit 0` && !originTree(P).includes(LOCK_GIT), `origin ${clip(log)}`);
+  });
+  await test('git: an unreadable repository lock -> exit 2 lock-held (unreadable, remove it by hand), the wake never starts', async () => {
+    const P = await setupGit('git-unreadable', { wakeSeconds: 1 });
+    pushLock(P, 'not json\n', 'a broken lock');
+    const n0 = wakesIn(P);
+    const r = await r3(W, P, ['trade', '--push']);
+    ok(r.code === 2 && r.j.status === 'lock-held' && r.j.holder && r.j.holder.unreadable === true && /unreadable/.test(r.j.notes || ''), say(r));
+    refusedCleanly(P, r, n0, 'unreadable');
+  });
+  // two runs that start together: the other run's lock lands between this run's pull and its push (a pre-push hook in
+  // this clone pushes it from the second clone, once), so git refuses this run's push; the run must drop its own lock
+  // commit, pull, find the winner's lock and stop
+  await test('git: two runs that start together: the loser\'s lock push is refused, it drops its lock commit, pulls, finds the winner\'s lock and stops (exit 2)', async () => {
+    const P = await setupGit('git-race', { wakeSeconds: 1 });
+    const fwd = (p) => p.replace(/\\/g, '/');
+    const winner = path.join(P.base, 'winner-lock.json'); fs.writeFileSync(winner, lockText('2026-10-28T1430Z', Date.now() + 3 * 3600000));
+    const done = path.join(P.base, 'race-done');
+    const hook = path.join(P.proj, '.git', 'hooks', 'pre-push');
+    fs.mkdirSync(path.dirname(hook), { recursive: true });
+    fs.writeFileSync(hook, ['#!/bin/sh', `[ -f "${fwd(done)}" ] && exit 0`, `: > "${fwd(done)}"`, 'unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX',
+      `cd "${fwd(P.clone2)}" && git pull -q --ff-only origin main && cp "${fwd(winner)}" ${LOCK_GIT} && git add -f ${LOCK_GIT} && git commit -q -m "lock: run 2026-10-28T1430Z started" && git push -q origin HEAD:main`, 'exit 0', ''].join('\n'));
+    if (!isWin) fs.chmodSync(hook, 0o755);
+    const n0 = wakesIn(P);
+    const r = await r3(W, P, ['trade', '--push']);
+    ok(exists(done), `the pre-push hook never ran: ${say(r)}`);
+    ok(r.code === 2 && r.j.status === 'lock-held' && r.j.holder && r.j.holder.run_id === '2026-10-28T1430Z', say(r));
+    refusedCleanly(P, r, n0, 'race', '2026-10-28T1430Z');
+    ok(originLog(P)[0] === 'lock: run 2026-10-28T1430Z started' && head(P.proj) === originHead(P), `this clone kept its own lock commit, or origin holds it: ${clip(originLog(P))}`);
+    ok(rj(path.join(P.run, '.repo-lock.deep-r3-trade.json')).run_id === '2026-10-28T1430Z', 'the working tree does not hold the winner\'s lock');
+  });
+  await test('git: a commit outside run/ on origin since the pin check -> exit 4 code-moved, the wake never starts, nothing pushed', async () => {
+    const P = await setupGit('git-codemoved', { wakeSeconds: 1 });
+    git(W, P.clone2, ['pull', '-q', '--ff-only', 'origin', 'main']);
+    fs.appendFileSync(path.join(P.clone2, 'README.md'), 'a code change pushed after the pin\n');
+    git(W, P.clone2, ['commit', '-q', '-am', 'a change outside run/']);
+    fs.writeFileSync(path.join(P.clone2, 'run', 'later.txt'), 'a record pushed after the code change\n');
+    git(W, P.clone2, ['add', '-f', 'run/later.txt']); git(W, P.clone2, ['commit', '-q', '-m', 'other clone: a later record']); git(W, P.clone2, ['push', '-q', 'origin', 'HEAD:main']);
+    const n0 = wakesIn(P); const pinned = head(P.proj); const readme = fs.readFileSync(path.join(P.proj, 'README.md'), 'utf8');
+    const r = await r3(W, P, ['trade', '--push']);
+    ok(r.code === 4 && r.j.exit === 4 && r.j.status === 'code-moved' && /\(\w+ a change outside run\/\)/.test(r.j.notes || ''), `code-moved must name the commit that changed the code, not the later records commit: ${say(r)}`);
+    refusedCleanly(P, r, n0, 'code-moved');
+    ok(head(P.proj) === pinned && fs.readFileSync(path.join(P.proj, 'README.md'), 'utf8') === readme, 'the commit outside run/ reached the working tree: the session would run code its pin check never saw');
+    ok(originLog(P)[0] === 'other clone: a later record' && originLog(P)[1] === 'a change outside run/' && !originTree(P).includes(LOCK_GIT), `origin ${clip(originLog(P))}`);
+  });
+  await test('git: a run refused at the gates with --push pushes its refusal and removes its repository lock in that push', async () => {
+    const P = await setupGit('git-gate', { wakeSeconds: 1 });
+    setupRecord(P, { signer_sha256: 'ab'.repeat(32) });
+    git(W, P.proj, ['add', '-f', 'run/setup.deep-r3-trade.json']); git(W, P.proj, ['commit', '-q', '-m', 'setup record: a wrong pin']); git(W, P.proj, ['push', '-q', 'origin', 'HEAD:main']);
+    const n0 = wakesIn(P);
+    const r = await r3(W, P, ['trade', '--push']);
+    const rid = r.j.run_id;
+    ok(r.code === 4 && r.j.status === 'aborted' && /^signer hash mismatch/.test(r.j.notes || ''), say(r));
+    ok(wakesIn(P) === n0, 'the planner\'s wake started');
+    ok(r.j.pushed && r.j.pushed.pushed === true && r.j.repo_lock && r.j.repo_lock.released === true, clip(r.j));
+    const log = originLog(P);
+    ok(log[0] === `records: run ${rid} refused at the gates` && log[1] === `lock: run ${rid} started` && !originTree(P).includes(LOCK_GIT), `origin ${clip(log)}`);
+  });
+  // a lock push that landed but reported an error (a lost reply): a pre-push hook in this clone pushes the same commit
+  // first, once, so origin holds this run's own lock and the outer push is refused. The run must find its own token
+  await test('git: a lock push that landed but reported an error -> the run finds its own lock, trades and removes it', async () => {
+    const P = await setupGit('git-ownlock', { wakeSeconds: 1 });
+    const done = path.join(P.base, 'own-push-done').replace(/\\/g, '/');
+    const hook = path.join(P.proj, '.git', 'hooks', 'pre-push');
+    fs.mkdirSync(path.dirname(hook), { recursive: true });
+    fs.writeFileSync(hook, ['#!/bin/sh', `[ -f "${done}" ] && exit 0`, `: > "${done}"`, 'git push -q origin HEAD:main', 'exit 0', ''].join('\n'));
+    if (!isWin) fs.chmodSync(hook, 0o755);
+    const r = await r3(W, P, ['trade', '--push']);
+    const rid = r.j.run_id;
+    ok(exists(done), `the pre-push hook never ran: ${say(r)}`);
+    ok(r.code === 0 && r.j.status === 'completed' && RID_RE.test(rid || ''), say(r));
+    const log = originLog(P);
+    ok(log.filter((s) => /^lock: run /.test(s)).length === 1 && log.includes(`lock: run ${rid} started`), `origin's lock commits: ${clip(log)}`);
+    ok(r.j.repo_lock && r.j.repo_lock.released === true && !originTree(P).includes(LOCK_GIT), clip(r.j.repo_lock));
+  });
+  // the planner's deadline comes from the setup record the run fetched: the lock must last at least as long
+  await test('git: the lock\'s life comes from the setup record as fetched (time_limit_hours raised on origin to 10 -> about 11 h)', async () => {
+    const P = await setupGit('git-limit', { wakeSeconds: 1 });
+    git(W, P.clone2, ['pull', '-q', '--ff-only', 'origin', 'main']);
+    const rec = rj(path.join(P.clone2, 'run', 'setup.deep-r3-trade.json')); rec.schedule = { ...(rec.schedule || {}), time_limit_hours: 10 };
+    wj(path.join(P.clone2, 'run', 'setup.deep-r3-trade.json'), rec);
+    git(W, P.clone2, ['add', '-f', 'run/setup.deep-r3-trade.json']); git(W, P.clone2, ['commit', '-q', '-m', 'setup record: time limit 10 h']); git(W, P.clone2, ['push', '-q', 'origin', 'HEAD:main']);
+    const r = await r3(W, P, ['trade', '--push']);
+    ok(r.code === 0 && r.j.status === 'completed', say(r));
+    const end = wakeEnd(P, r.j.run_id); let l = null; try { l = JSON.parse(end.repo_lock_text); } catch (e) { l = null; }
+    const hours = l ? (Date.parse(l.expires_at) - Date.parse(l.started_at)) / 3600000 : null;
+    ok(hours !== null && Math.abs(hours - 11) < 0.02, `the lock lasts ${hours} h, not the fetched limit + 1 h: ${clip(end && end.repo_lock_text)}`);
+  });
+  await test('git: a time_limit_hours that is not a positive number on origin -> exit 2 lock-unavailable, the wake never starts', async () => {
+    const P = await setupGit('git-badlimit', { wakeSeconds: 1 });
+    git(W, P.clone2, ['pull', '-q', '--ff-only', 'origin', 'main']);
+    const rec = rj(path.join(P.clone2, 'run', 'setup.deep-r3-trade.json')); rec.schedule = { ...(rec.schedule || {}), time_limit_hours: '6h' };
+    wj(path.join(P.clone2, 'run', 'setup.deep-r3-trade.json'), rec);
+    git(W, P.clone2, ['add', '-f', 'run/setup.deep-r3-trade.json']); git(W, P.clone2, ['commit', '-q', '-m', 'setup record: a bad time limit']); git(W, P.clone2, ['push', '-q', 'origin', 'HEAD:main']);
+    const n0 = wakesIn(P);
+    const r = await r3(W, P, ['trade', '--push']);
+    ok(r.code === 2 && r.j.status === 'lock-unavailable' && /time_limit_hours/.test(r.j.notes || ''), say(r));
+    refusedCleanly(P, r, n0, 'bad limit');
+  });
+  await test('git: a setup record with no time_limit_hours on origin -> exit 2 lock-unavailable (the planner would set itself no deadline)', async () => {
+    const P = await setupGit('git-nolimit', { wakeSeconds: 1 });
+    git(W, P.clone2, ['pull', '-q', '--ff-only', 'origin', 'main']);
+    const rec = rj(path.join(P.clone2, 'run', 'setup.deep-r3-trade.json')); rec.schedule = { ...(rec.schedule || {}) }; delete rec.schedule.time_limit_hours;
+    wj(path.join(P.clone2, 'run', 'setup.deep-r3-trade.json'), rec);
+    git(W, P.clone2, ['add', '-f', 'run/setup.deep-r3-trade.json']); git(W, P.clone2, ['commit', '-q', '-m', 'setup record: no time limit']); git(W, P.clone2, ['push', '-q', 'origin', 'HEAD:main']);
+    const n0 = wakesIn(P);
+    const r = await r3(W, P, ['trade', '--push']);
+    ok(r.code === 2 && r.j.status === 'lock-unavailable' && /missing or not a positive number/.test(r.j.notes || ''), say(r));
+    refusedCleanly(P, r, n0, 'no limit');
+  });
+  await test('git: a detached HEAD with no git.branch in the config -> exit 2 lock-unavailable naming git.branch, the wake never starts', async () => {
+    const P = await setupGit('git-detached', { wakeSeconds: 1 });
+    git(W, P.proj, ['checkout', '-q', '--detach']);
+    const n0 = wakesIn(P);
+    const r = await r3(W, P, ['trade', '--push']);
+    ok(r.code === 2 && r.j.status === 'lock-unavailable' && /git\.branch/.test(r.j.notes || ''), say(r));
+    refusedCleanly(P, r, n0, 'detached');
+    const cl = await r3(W, P, ['clearance', '--push']);
+    ok(cl.j.pushed && cl.j.pushed.pushed === false && /set git\.branch/.test(cl.j.pushed.error || ''), `a records push from a detached HEAD must name git.branch: ${say(cl)}`);
+  });
+  await test('git: an arm lock committed in the trading repository -> exit 2 lock-committed with the fix, the wake never starts', async () => {
+    const P = await setupGit('git-armlock', { wakeSeconds: 1 });
+    fs.mkdirSync(P.lock, { recursive: true });
+    fs.writeFileSync(path.join(P.lock, 'owner.txt'), JSON.stringify({ pid: 4242, process_start_time: new Date(Date.now() - 172800000).toISOString(), host: 'OPERATOR-PC', started_at: new Date(Date.now() - 172800000).toISOString(), stage: 'claude-p', run_id: 'old' }));
+    git(W, P.proj, ['add', '-f', 'run/.lock.deep-r3-trade/owner.txt']); git(W, P.proj, ['commit', '-q', '-m', 'a committed arm lock']); git(W, P.proj, ['push', '-q', 'origin', 'HEAD:main']);
+    const n0 = wakesIn(P);
+    const r = await r3(W, P, ['trade', '--push']);
+    ok(r.code === 2 && r.j.status === 'lock-committed' && /git rm -r --cached run\/\.lock\.deep-r3-trade/.test(r.j.notes || ''), say(r));
+    ok(wakesIn(P) === n0 && String(git(W, P.proj, ['status', '--porcelain', '--untracked-files=no']).stdout).trim() === '', 'the wake started, or the clone was left with changes');
+  });
+  await test('git: a clone with a tracked file changed -> exit 2 lock-unavailable (the pull needs a clean clone), the wake never starts, nothing pushed', async () => {
+    const P = await setupGit('git-dirty', { wakeSeconds: 1 });
+    fs.appendFileSync(path.join(P.proj, 'README.md'), 'an uncommitted edit\n');
+    const n0 = wakesIn(P); const before = originHead(P);
+    const r = await r3(W, P, ['trade', '--push']);
+    ok(r.code === 2 && r.j.status === 'lock-unavailable' && /clean clone/.test(r.j.notes || ''), say(r));
+    refusedCleanly(P, r, n0, 'dirty');
+    ok(originHead(P) === before, 'origin moved');
   });
 }
 

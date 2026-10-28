@@ -1,6 +1,6 @@
 ---
 name: deep-r3-trade
-description: Run the naive baseline trading pipeline over the 98 Deep Funding Round 3 Originality repo markets on deep.seer.pm, or set up, fund, check or resume its trading wallet. Wallet onboarding enters I.1. After setup (one green supervised run plus the operator's standing authorization, asked on the first run, and a passing signer self-test) it trades autonomously every day through I.2, as Claude Code routines on any operating system (or a Codex scheduled task on the operator's own computer); manual sessions run in supervised mode, with a human "yes" per batch. An AI agent runs every supervised run and every routine run. The method is D's forecast (by default a provided CSV, taken at face value as deep.seer.pm takes it), no reconciliation, max-EV sizing, then mint, trade, merge and redeem on Optimism (atomic, or sequential for a non-atomic signer). Other Seer markets and contests belong to seer-trade.
+description: Run the naive baseline trading pipeline over the 98 Deep Funding Round 3 Originality repo markets on deep.seer.pm, or set up, fund, check or resume its trading wallet. Wallet onboarding enters I.1. After setup (the operator's standing authorization, a passing signer self-test and a setup run whose clearance checks the whole plan without sending; no supervised trading run) it trades autonomously through I.2, on its schedule and on a trade now (the routine's Run now), as Claude Code routines on any operating system (or with Codex, in ChatGPT's cloud or on the operator's own computer); manual sessions run in supervised mode, with a human "yes" per batch. An AI agent runs every supervised run and every routine run. The method is D's forecast (by default a provided CSV, taken at face value as deep.seer.pm takes it), no reconciliation, max-EV sizing, then mint, trade, merge and redeem on Optimism (atomic, or sequential for a non-atomic signer). Other Seer markets and contests belong to seer-trade.
 ---
 
 # deep-r3-trade — the naive baseline, end to end
@@ -27,8 +27,11 @@ through the reasoned pipeline that `seer-trade` orchestrates — so the two can 
   other way to forecast (AI research, a model, a pool of forecasters) is a participant's own change to D, which this
   skill does not implement. The agent never changes D on its own.
 - **An AI agent runs every supervised run and every routine run**. Scheduled runs are Claude Code routines (`steps/I-setup.md`
-  I.2 §7), so they work on any operating system and need no machine left on; or, in their place, a Codex scheduled
-  task on the operator's own computer (I.2 §7, *A Codex scheduled task*), which needs that computer on at run times.
+  I.2 §7), so they work on any operating system and need no machine left on; or, in their place, the operator's
+  choice of ChatGPT: a Codex cloud task in ChatGPT's cloud (I.2 §7, *A Codex cloud task*), or a Codex scheduled task
+  on their own computer (I.2 §7, *A Codex scheduled task*), which needs that computer on at run times.
+  A trade now is the same run started by hand (the routine's or the task's *Run now*); two runs never overlap (I.2
+  §7, *Trade now*). Setup has no supervised trading run: the first trade is the first scheduled run or a trade now.
 - **Traders customise it by editing a step.** Every simplification is listed in *What this baseline gives up*,
   and *Architecture* maps each behaviour to the one file that owns it. A trader who wants a blend in E or a
   Kelly fraction in F edits that step (or, for E, swaps in the `seer-trade` one); the agent does not make that
@@ -129,7 +132,7 @@ arms — that is what lets a step from one arm drop into the other. I writes non
 | F | `steps/F-max-ev.md` | `blended.json`, `candidates.json` + *the holder's repo-token and child-Invalid balance per market (no UP/DOWN read)* | `allocation.json` | per market `set-sell`, or `merge-arb` then the sub-1 pair (3a, 3b), then greedy marginal EV; `objective: "max-ev"`, 98 independent per-market budgets, one repo token each: that market's repo tokens already held plus the new mint `M` |
 | G | `steps/G-mint-and-trade.md` | `allocation.json` | `fills.json` | mint (parent, then each middle), route each fill, simulate, **human approval** (supervised mode; in autonomous mode see *Two modes*), send once; later exit, then merge and redeem child → middle → parent |
 | H | `steps/H-no-learn.md` | `fills.json`, `base-forecast.json`, `blended.json`, `allocation.json`, `candidates.json` | `review.json`, once a market has settled | realised payouts, Brier three ways, PnL attribution — and update nothing; until then it writes no file and says `nothing settled yet` |
-| I | `steps/I-setup.md` | I.1: wallet setup/funding/resume request, public signer metadata and expected identity. I.2: the operator's first-run answers, the first supervised run's artifacts and `report.md` (green-run check, I.2 §1) | `./run/setup.deep-r3-trade.json` | **I.1** reuse or create the wallet, verify signer and holder, report funding and atomic capability, then the PSM3 ramp/preflight. **I.2** the autonomous daily run — first-run consent, green-run gate, signer allowlist self-test, stored CSV, run-id, lock, the Claude Code routine and `CADENCE` (I.2 §7–§8). **Not swappable** — see *Architecture* |
+| I | `steps/I-setup.md` | I.1: wallet setup/funding/resume request, public signer metadata and expected identity. I.2: the operator's answers at setup (I.2 §1) | `./run/setup.deep-r3-trade.json` | **I.1** reuse or create the wallet, verify signer and holder, report funding and atomic capability, then the PSM3 ramp/preflight. **I.2** the autonomous daily run — consent at setup, signer allowlist self-test, the setup run's clearance, stored CSV, run-id, the locks, the Claude Code routine, trade now and `CADENCE` (I.2 §7–§8). **Not swappable** — see *Architecture* |
 
 **The run loop.** A and B are references, read when a step calls for them. For C–H **in that order** (I brackets them):
 
@@ -146,20 +149,24 @@ arms — that is what lets a step from one arm drop into the other. I writes non
 ```
 I.1   setup, funding or resume; before the first trading run   ->  ./run/setup.deep-r3-trade.json
 C -> D -> E -> [PSM3 ramp of any USDC/USDS at the holder, I.1 §5, its own human "yes", sent]
-  -> F -> [human approves plan] -> G -> H                          supervised, one run-id, real money;
+  -> F -> [human approves plan] -> G -> H                          supervised (optional), one run-id, real money;
       F sizes on the holder's actual post-ramp sUSDS; skip the ramp when USDC and USDS are both zero;
       a supervised run-id has no wake-status.json; its closing step writes report.md (I.2 §6);
-      H writes review.json only once a market has settled, and the green run needs no score (I.2 §1)
-I.2   after a green supervised run, the operator's two yeses, a passing signer self-test, the
+      H writes review.json only once a market has settled; setup needs no supervised run (I.2 §1)
+I.2   after the operator's two yeses, a passing signer self-test, the
       read-only chain helper in place of node -e (while a Claude routine's tools include node -e: no Q2
       yes, no schedule, needs-chain-helper; a Codex task: I.2 §1 item 2) and the planner with its clearance passed
       (until then: no Q2 yes, no schedule, needs-planner)
-                                                               ->  autonomy + schedule + first_successful_run
-then every autonomous run (interval = CADENCE, declared in I.2 §8), a Claude Code routine whose agent
+                                                               ->  autonomy + schedule
+then every autonomous run (interval = CADENCE, declared in I.2 §8, or a trade now: the same run started
+      by hand, I.2 §7), a Claude Code routine whose agent
       first runs its prompt's code-pin check in the trading clone (any change outside run/ from the
       pinned tree, or a check that could not run: stop, run nothing), then `node r3.cjs install` and
       `node r3.cjs trade --push`
-      (I.2 §7): r3.cjs first checks autonomy.signer_path and autonomy.planner_path and, if either is
+      (I.2 §7): r3.cjs first takes the repository lock (another run of the routine live: stop,
+      lock-held, exit 2; a commit outside run/ on origin that the pin check did not see: stop,
+      code-moved, exit 4; the lock could not be taken: stop, lock-unavailable, exit 2),
+      then checks autonomy.signer_path and autonomy.planner_path and, if either is
       not this install's path, is missing, or its sha256 differs from autonomy.signer_sha256 or
       autonomy.planner_sha256, logs it, writes wake-status aborted with the reason and exits 4
       without starting the planner's wake
@@ -167,7 +174,7 @@ then every autonomous run (interval = CADENCE, declared in I.2 §8), a Claude Co
       not test them and never changes these fields because of them; it sends through its own
       signer, each batch on the human's own yes);
       then the run exits at once if
-      first_successful_run is null, autonomy.enabled is not true, autonomy.authorized_at is null,
+      autonomy.enabled is not true, autonomy.authorized_at is null,
       autonomy.signer_selftest_passed_at is null or schedule.signer_allow_rule_added_at is null — in a FRESH run-id, no per-batch "yes",
       all of it computed and sent by the planner's wake, never by hand:
       C -> D -> E -> [PSM3 ramp, simulated and sent] -> F on the real post-ramp sUSDS plus the repo
@@ -222,7 +229,8 @@ drive the signer can trade.
    its allowlist (below), the key itself is protected as the paragraph above lists, and only a dedicated wallet
    bounds what a leaked key can take. Autonomous mode is off until this authorization exists and the signer self-test
    has passed.
-2. **The one-time green supervised run** (I.2 §1) precedes enabling the schedule — one-time setup, not a per-run gate.
+2. **The one-time clearance** (I.2 §1, §7), the setup run's check of the whole plan that sends nothing, precedes
+   enabling the schedule — one-time setup (again after a change of the code), not a per-run gate.
 3. **Full ordered simulation** of the whole sequence with `eth_simulateV1`, immediately before sending (G §8); any
    `status` other than `0x1` in a group makes the plan stale. Before the run's first broadcast, re-run F and
    re-simulate once; if the rebuilt plan fails again, write the failing group and every later group `skipped`, with
@@ -235,12 +243,14 @@ drive the signer can trade.
    (G §8 *Affordability*, the one place the rule is written); a shortfall skips that group and every later one, and
    the run continues to Half B.
 5. **`inflight.json` before every broadcast, and never re-send**: an unconfirmed hash is reconciled from chain
-   state, never re-sent. Plus `r3.cjs`'s arm lock, which covers one clone, not the wallet: one sender per wallet is
+   state, never re-sent. Plus `r3.cjs`'s arm lock, which covers one clone, and with `--push` its repository lock, which covers
+   the routine's own runs, a trade now included (I.2 §7); neither covers the wallet, so one sender per wallet is
    the operator's job (`steps/I-setup.md` I.2 §6).
 6. **A deterministic recovery rule for a non-atomic signer.** If a group stops part-way, first settle the nonce `n`
    recorded in `inflight.json` by the rule in `steps/G-mint-and-trade.md` §8 step 4, the one place it is written
    (Landed, Pending or Not sent, no timeout; only Pending, and a Not sent on a signer that cannot pin the nonce,
-   block sending), before building any recovery.
+   block sending, and a scheduled run consumes the latter itself with a zero-value cancel to the owner), before
+   building any recovery.
    Once it is settled, the recovery rule: if the landed transaction reverted, or the next transaction would breach its floor or
    fail a fresh check, re-quote; if completing it clears its floors and the boundary allows, complete it, otherwise
    unwind what landed (sell the stray leg, or merge back) if the boundary allows; if the boundary allows neither trading nor
@@ -251,7 +261,7 @@ drive the signer can trade.
    csv-store-mismatch | aborted`) plus a short human-readable `./run/<run-id>/report.md` — what was sent (tx
    hashes), what was skipped and why, balances before and after, and P&L so far from H.
 
-**The first run asks the operator, in plain words.** In the first supervised session the skill explains what
+**Setup asks the operator, in plain words.** In the setup session, once the CSV is stored, the skill explains what
 autonomous mode does (every `CADENCE` the agent buys, sells, mints, merges and redeems on the 98 Round 3 markets
 with the whole balance of the trading wallet, without asking per batch), what protects the funds (the signer
 allowlist, which bounds what the signer signs — scope only, no amount or frequency limits; in the trading routine,
@@ -269,9 +279,10 @@ used). It then asks for two explicit permissions:
    `Bash(node r3.cjs planner *)`, `Bash(node r3.cjs planner)`, `Read(~/.r3-signer-keys/**)`, `Read(//proc/**)`,
    `Write`, `Edit`, `NotebookEdit`, `Glob`, `Grep`, `Skill`, `WebFetch`, `WebSearch` and `Agent`; it has no
    connectors; and `r3.cjs trade` runs the planner, which starts the signer's
-   `check`, `simulate` and `send` as its own child processes, which no Claude Code rule sees.
+   `check`, `simulate` and `send`, and only to clear a stuck nonce its `clear-nonce` and `reconcile` (G §8 *Nonce
+   pinning*), as its own child processes, which no Claude Code rule sees.
    A yes, given once that routine exists with exactly those tools and its pinned prompt and its setup run (the
-   self-test and the planner's clearance) has passed (a Codex scheduled task in its place: I.2 §1 item 2's own
+   self-test and the planner's clearance) has passed (a Codex task in its place: I.2 §1 item 2's own
    conditions), is recorded as `schedule.signer_allow_rule_added_at`. Without
    it (the field null) the scheduled run sends nothing: the planner checks that field at the start of each send step.
    Q1 is asked first, then the signer self-test runs, then Q2; if the self-test fails, Q2 is not asked and the skill
@@ -280,12 +291,12 @@ used). It then asks for two explicit permissions:
    the allowlist. If the self-test fails or was never run, or the trading routine's signer path or hash changes, the
    trading routine is paused and the field set to null.
 
-Only after both yeses, the signer self-test, the one green supervised run, the read-only chain helper in place of
+Only after both yeses, the signer self-test, the read-only chain helper in place of
 `node -e` and the planner with its clearance passed (below; both installed by the operator, or laid down from the
 pinned commit by `node r3.cjs install`) is the schedule registered in autonomous mode; later runs do not ask
 again. To revoke at any time: set `autonomy.enabled` to false, set `schedule.signer_allow_rule_added_at` to null and
 pause the trading routine (a Codex scheduled task: pause it in the app, and change the setup record in the clone it
-runs in, since it never pulls). Removing `R3_KEYSTORE_JSON` and `R3_KEYSTORE_PASSWORD` from the trading environment stops new
+runs in, since it never pulls; a Codex cloud task: pause its schedule in ChatGPT). Removing `R3_KEYSTORE_JSON` and `R3_KEYSTORE_PASSWORD` from the trading environment stops new
 runs from getting the key; a past run's VM pauses with its files saved, the key files `install` wrote among them, and
 continuing its session restores it, so a trading run's session is never continued.
 
@@ -304,7 +315,8 @@ starts (`send`, `simulate`, `check`) always applies the allowlist, refuses off-c
 authorizations and never prints signed transaction bytes, and no mode-switch (an extra argument or flag, a
 switch-named environment variable or input key: `steps/I-setup.md` I.1 §7) switches any of this off; supervised off-allowlist actions (the `steps/I-setup.md` I.1 §5 exit to the human's own address,
 the sweep) go through a separate entry point that the planner never starts and only a supervised session runs, so
-each one prompts the human. It
+each one prompts the human (the one exception: a scheduled run's own cancel of a stuck nonce, the signer's
+`clear-nonce`, a zero-value transaction to the pinned `owner` that moves no funds, G §8 *Nonce pinning*). It
 limits **what** can be signed, never how much or how often. Its self-test is a policy check, not a simulation:
 before autonomous mode is enabled the signer must refuse every off-allowlist case with a distinct allowlist refusal,
 decided before any RPC call, and accept one allowlisted call, all through its policy-only entry point (a separate
@@ -338,7 +350,7 @@ variables: the agent never reads it, and what protects it is listed at the top o
 runs that planner, never a path from a record. `r3.cjs`'s planner passthrough refuses the planner's send entry points
 (`exec` without `--check`, `halfb --send`, `wake`) wherever `R3_KEYSTORE_JSON` or `R3_KEYSTORE_PASSWORD` is set; that
 refusal is keyed on those variables, so it is one layer, not a wall.
-**It computes C to H only through the planner** (`scripts/planner.cjs`), never by hand: `r3.cjs trade` takes the arm lock, checks the pinned planner and signer, and runs
+**It computes C to H only through the planner** (`scripts/planner.cjs`), never by hand: `r3.cjs trade` takes the arm lock (with `--push`, the repository lock too), checks the pinned planner and signer, and runs
 `node <planner path> wake <run-id>` exactly once (`steps/I-setup.md` I.2 §7); supervised sessions may use every
 planner subcommand (`node r3.cjs planner <subcommand> …`) or `node -e`, each call prompting the human. The trading
 run reads the data function's raw body on `R3_DATA_HOST`, and makes its
@@ -350,16 +362,16 @@ commit by `node r3.cjs install` (`steps/I-setup.md` I.2 §7), and never written 
 never go through `node -e` or `WebFetch`, which summarises through a model and truncates the body. Never record the Q2 yes and never turn on the
 schedule while the trading routine's tools include a general shell or `node -e`; record the blocker as
 `needs-chain-helper` instead; nor before the installed planner has passed its clearance (`needs-planner`,
-`steps/I-setup.md` I.2 §7). A Codex scheduled task in the routine's place has no tool lists: for it alone, I.2 §1
-item 2's Codex rule applies, and `needs-chain-helper` means only that no helper is installed or it has not passed
+`steps/I-setup.md` I.2 §7). A Codex task in the routine's place (a Codex cloud task, or a scheduled task on the operator's computer) has no
+tool lists: for it alone, I.2 §1 item 2's Codex rule applies, and `needs-chain-helper` means only that no helper is installed or it has not passed
 the pipeline check.
 Supervised sessions may still use `node -e`, because each call prompts the human. In autonomous
 mode the plan is built and sent in the same run. In supervised mode only, a plan approved more than
 `STALE_APPROVAL` after it was built is re-run from C in the same run-id: a queued ramp is sent first, on its own
 "yes", sUSDS re-read, C–F re-run in the same run-id with the real post-ramp bankroll, and gates 2 and 3 re-presented.
 
-**The CSV is this arm's wrinkle** (`steps/D-forecast.md`, `steps/D-methods/csv.md`). It is supplied **once** — by a human, in a session, at setup or in a
-supervised run — and then **stored**: `./run/csv/originality-v<N>-<slug>.csv`, write-once, pointed at by
+**The CSV is this arm's wrinkle** (`steps/D-forecast.md`, `steps/D-methods/csv.md`). It is supplied **once** — by a human, in a session, at setup or later as a
+new version — and then **stored**: `./run/csv/originality-v<N>-<slug>.csv`, write-once, pointed at by
 `./run/csv/current.json`. Every later wake **loads it and proceeds silently**; none asks for a fresh one and
 none blocks waiting for one. A newly supplied CSV supersedes it as a new version. No CSV ever provided is a
 stop at D with `status: "no-csv"`; a pointer that does not resolve, with `csv-store-mismatch` — recorded,
@@ -395,10 +407,10 @@ target is intended. That is how day 2 and later still trade: F's budget per mark
 already held plus the new mint `M` (`steps/F-max-ev.md`).
 
 **The four gates.** Gates 2–4, the ramp's own "yes" and a recovery batch's "yes" are supervised mode; in
-autonomous mode see *Two modes*. Nothing else pauses except two that step
+autonomous mode see *Two modes*. Nothing else pauses except one that step
 I adds and one a non-atomic signer can add: the PSM3 ramp (`steps/I-setup.md` I.1 §5) — at setup, and again between
-E and F in any supervised run whose holder holds USDC or USDS — is its own batch with its own "yes", and I.2 may not
-register a schedule until a supervised run has come back green; and, with a non-atomic signer, a recovery batch
+E and F in any supervised run whose holder holds USDC or USDS — is its own batch with its own "yes" (a scheduled run's wake sends its
+own ramp, under the standing authorization); and, with a non-atomic signer, a recovery batch
 after a failed, reverted or floor-breaching transaction (*Money safety*) stops the sends and needs its own "yes".
 
 1. **D** needs a CSV — the stored one, or a fresh one the human hands over now
@@ -579,7 +591,7 @@ project root, the folder the human runs Claude Code in — never an absolute pat
 | the EV objective, the trade band, the 98 per-market budgets, the mint size `M` | `steps/F-max-ev.md` |
 | the mint, route, merge, exit or redeem calls; batching; the signer interface | `steps/G-mint-and-trade.md` |
 | the scoring — Brier three ways, PnL attribution, its refusal to learn | `steps/H-no-learn.md` |
-| the daily run's cadence (`CADENCE`, declared once in I.2 §8), `WAKE_AT`, `SCOUT_CADENCE`, `BANKROLL` (all holder balances), `STALE_APPROVAL` (supervised mode only), the lock's **path** (I.2 §8) — the lock's **mechanics** (I.2 §6) — the wallet, the signer mode and preflight (I.1) — the first-run consent, the `autonomy` record, the signer allowlist and its self-test (I.2) | `steps/I-setup.md` |
+| the daily run's cadence (`CADENCE`, declared once in I.2 §8), `WAKE_AT`, `SCOUT_CADENCE`, `BANKROLL` (all holder balances), `STALE_APPROVAL` (supervised mode only), the lock's **path** (I.2 §8) — the lock's **mechanics** (I.2 §6) — the wallet, the signer mode and preflight (I.1) — the consent asked at setup, the `autonomy` record, the signer allowlist and its self-test (I.2) | `steps/I-setup.md` |
 | the reference chain helper, signer and planner (code, tests, READMEs, example configs) and how the operator installs them | `scripts/` — `steps/I-setup.md` I.2 §7 |
 | shared wallet creation/reuse, signer verification, funding/resume and public status tooling | `../evm-onchain/reference/wallet-onboarding.md` |
 | an infrastructure address, gas ceiling, RPC or Uniswap fact (A) — an artifact shape or Router / CTF / Reality.eth mechanic (B) | `evm-onchain` — `seer-protocol`. **Shared: an edit here changes both arms, and a §10 shape change breaks every swap** |

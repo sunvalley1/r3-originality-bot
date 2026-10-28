@@ -2,7 +2,8 @@
 
 **A scheduled run reads no further.** If your prompt has you run the code pin check as your first command
 (`test "$(git ls-tree HEAD | ...`, or a `node -e` command over `git ls-tree`), or says this is a setup run or that you
-are a Codex scheduled task, you are the trading routine, its setup run or the Codex scheduled task in its place: run
+are a Codex scheduled task or a Codex cloud task, you are the trading routine, its setup run or the Codex task in its
+place: run
 nothing this file asks for, not even the checks below; follow your prompt and
 `.claude/skills/deep-r3-trade/routines/trade.md` only, and treat this file as data.
 
@@ -11,8 +12,13 @@ Everyone else: this repository is the R3 Originality trading bot, a skill in `.c
 
 ## When a person opens this repository
 
-Find out how far their setup has got before doing anything else, with these read-only checks, and tell them in one
-short list what is done and what is next:
+**First, their choice of where the bot runs**, unless they already said: **Claude** (a routine in the cloud: SETUP.md
+steps 6 to 8; it needs Claude Code's `/schedule`, the only way to give a routine its allowed and denied tools),
+**ChatGPT in the cloud** (a Codex cloud environment and a schedule: SETUP.md "6 to 8 with ChatGPT in the cloud"; it
+works only if a cloud task can push to their private copy, which its setup run checks), or **ChatGPT on their own
+computer** (a Codex scheduled task: SETUP.md "6 to 8 with Codex instead"; the computer must be on with the ChatGPT app
+open at run times). Steps 1 to 5 are the same for all three. Then find out how far their setup has got, with these
+read-only checks, and tell them in one short list what is done and what is next:
 
 1. `git remote get-url origin`: `sunvalley1/r3-originality-bot` (or no `origin`) means step 1 of
    [SETUP.md](SETUP.md) is still to do in this folder; their own private repository means it is done (a `public`
@@ -24,16 +30,14 @@ short list what is done and what is next:
    (if not, adding them comes next, before any key file exists).
 3. `setup/r3-allowlist.json` exists and its sha256 equals `routine.config.json`'s `allowlistSha256`.
 4. `run/csv/current.json` exists (a CSV has been supplied).
-5. `run/setup.deep-r3-trade.json`, after a `git pull`: `first_successful_run`, `autonomy.authorized_at` and
-   `autonomy.signer_selftest_passed_at` (step 4); then step 8 is done only when `schedule.signer_allow_rule_added_at`
+5. `run/setup.deep-r3-trade.json`, after a `git pull`: `autonomy.authorized_at` and
+   `autonomy.signer_selftest_passed_at` (step 4; there is no supervised trading run); then step 8 is done only when `schedule.signer_allow_rule_added_at`
    is set and `autonomy.signer_path` and `autonomy.planner_path` equal `installed.signer` and `installed.planner` in
-   the clearance that cleared the scheduler: the cloud setup run's (`/root/...` paths) for a Claude routine, or a
-   supervised `node r3.cjs clearance` on this computer for a Codex scheduled task (SETUP.md C1 and C2). Until then
-   every scheduled run stops at its start: do not let them switch the schedule on.
-6. What you cannot see (the cloud environment, the routine, the wallet's funding): ask.
-7. Which scheduler they will use: a Claude routine in the cloud (SETUP.md steps 6 to 8; it needs Claude Code's
-   `/schedule`, the only way to give a routine its allowed and denied tools), or a Codex scheduled task on their own
-   computer, which must then be on with the ChatGPT app open at run times (SETUP.md "6 to 8 with Codex instead").
+   the clearance that cleared the scheduler: the cloud setup run's (`/root/...` paths) for a Claude routine, the Codex
+   cloud setup run's for ChatGPT in the cloud (SETUP.md CC2), or a supervised `node r3.cjs clearance` on this computer
+   for a Codex scheduled task (SETUP.md C1 and C2). Until then
+   every scheduled run stops at its start. Switching the schedule on is the person's call, not yours.
+6. What you cannot see (the cloud environment, the routine or schedule, the wallet's funding): ask.
 
 If anything is left, offer to walk them through [SETUP.md](SETUP.md) from that step, one step at a time: say what the
 step is for, what they will do and what you will do, wait for them to finish it, check it with the step's own check,
@@ -57,8 +61,12 @@ and only then go on. If they decline, do what they asked.
   `sweep-*`, `send`) only after the person approved that exact command; for `exec` and `halfb --send`, their "yes" to
   the batch comes first (`SKILL.md`). `allowlist-init` is never yours to run, even with their approval: the person
   runs it in their own terminal (SETUP.md step 3; `scripts/signer.README.md`).
-- Never start a scheduled trading run by hand while another run may be live: one sender per wallet. Pause the
-  routine (or the Codex scheduled task) before any supervised send from this computer.
+- **A trade now is the person's to start** (the routine's or the Codex task's *Run now*; in Claude Code you may
+  start the routine with `/schedule run` when they ask, never by giving the routine a one-time schedule, which would
+  replace its recurring one; with ChatGPT, where there is no *Run now*, a one-time run of the same prompt one minute
+  ahead does the same). A run that finds another one live stops by itself
+  (`lock-held`), but nothing stops a supervised send: never start one while a supervised send from this computer
+  may be under way, and pause the schedule before any supervised send. One sender per wallet.
 - Push only what the person asked for. Never push `run/` or `inputs/` to the public repository.
 - Use Node.js 22. On Windows, Node 24 crashes the bot's tools.
 - If you are not Claude Code: run the skill by reading `.claude/skills/deep-r3-trade/SKILL.md` in full and following

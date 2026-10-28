@@ -1,7 +1,8 @@
 # Worked example — deep-r3-trade, 0.30 sUSDS at the 2026-09-29 book prices
 
 > This example belongs to the **deep-r3-trade** skill and is worth reading before a first run: it is one
-> end-to-end pass, D through H, of that first, supervised run. Step files referred to here are `../steps/*.md`, and
+> end-to-end pass, D through H, of a supervised run (optional: setup has none, and the first trade is usually a
+> scheduled run or a trade now). Step files referred to here are `../steps/*.md`, and
 > "gate 4" and the other gate numbers are the four gates in `../SKILL.md`. Gates 2–4 bind supervised mode; in
 > autonomous mode the standing authorization and G §8's pre-send checks (`../steps/G-mint-and-trade.md` §8,
 > *Two modes*) take their place, and nothing waits for a per-batch "yes". The structure is Round 3's
@@ -224,11 +225,11 @@ either: its Brier fields are null unless its market has a CSV row, which is then
 attribution puts the locked gain in `edge`, a set-sell's kept child Invalid in `resolution_surprise`, and
 a merge-arb settles at execution with `resolution_surprise` 0.
 
-**Day 2 — the next autonomous run, on a held book.** This happens only if, at the first run, the operator
+**Day 2 — the next autonomous run, on a held book.** This happens only if, at setup, the operator
 said yes to autonomous daily trading and to running the signer without prompting, the signer passed its
 allowlist self-test (a distinct allowlist refusal for every off-allowlist case and acceptance of the
-allowlisted call, through its policy-only entry point; `../steps/I-setup.md` I.1 §7), and the supervised
-run above came back green (`../steps/I-setup.md` I.2);
+allowlisted call, through its policy-only entry point; `../steps/I-setup.md` I.1 §7), and the setup run's
+no-send clearance passed (`../steps/I-setup.md` I.2 §1, §7);
 otherwise day 2 is another supervised run. One `CADENCE` later the scheduled run opens a fresh run-id and
 runs C → D (the stored CSV) → E → PSM3 ramp of any USDC/USDS → F → G → H with no per-batch "yes". Say
 prices have moved back below target. G §1's guard is per run-id and per plan: it stops this run's plan

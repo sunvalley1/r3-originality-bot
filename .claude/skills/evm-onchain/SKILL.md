@@ -7,12 +7,14 @@ description: Routes EVM and Ethereum questions to the right ethskills.com leaf a
 
 **INPUT:** none. **OUTPUT:** none. This is a reference, not a pipeline step. Every step C–I of
 `seer-trade` and `deep-r3-trade` may read it — including `../seer-trade/steps/I-setup.md` and
-`../deep-r3-trade/steps/I-setup.md`, which stand the wallet up before C and, only when requested after a
-green supervised pass, register the optional wake. **`deep-r3-trade`'s scheduled run trades
-autonomously** after setup — one green supervised run, the operator's consent on the first run (to
-autonomous daily trading, and to running the signer CLI without a prompt) and a passed signer allowlist
-self-test — signing only through the operator's signing process, whose allowlist bounds what it may sign
-(scope only, no amount or frequency limit); the agent never reads the key. **`seer-trade`'s wake remains
+`../deep-r3-trade/steps/I-setup.md`, which stand the wallet up before C and register the optional wake: seer-trade's only when requested after a
+green supervised pass. **`deep-r3-trade`'s scheduled run trades
+autonomously** after setup — the operator's consent asked at setup (to
+autonomous daily trading, and to running the signer CLI without a prompt), a passed signer allowlist
+self-test and the setup run's no-send clearance, with no supervised trading run — signing only through the operator's signing process, whose allowlist bounds what it may sign
+(scope only, no amount or frequency limit; the one exception is the run's own cancel of a stuck nonce, the signer's
+`clear-nonce`, a zero-value transaction to the pinned owner: `../deep-r3-trade/steps/G-mint-and-trade.md` §8
+*Nonce pinning*); the agent never reads the key. **`seer-trade`'s wake remains
 prepare-only for now:** it holds no signer in any signer mode and must run as a separate standard
 (non-admin) OS user that cannot reach the key; without that user, do not schedule — run the pipeline
 manually ([wallet onboarding](reference/wallet-onboarding.md) has the plain-language rule for both).

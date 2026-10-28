@@ -547,12 +547,36 @@ function scopeRule(inp) {
   }
   return 'selector';
 }
+// The two supervised entry points a scheduled run starts (exec-core: a stuck nonce cleared by the run itself), answered
+// as a MockOut (the last line), after any broadcast line. reconcile: no send-lock here, or the scenario's signerLock
+// {status, nonce}; clear-nonce <n>: a zero-value transaction to the owner at exactly n, mined at once, or the scenario's
+// signerCancel "refuse": the signer's gas refusal, nothing signed.
+const MOCK_OWNER = fakeAddr('owner');
+function mockSelfClear(M, dir, sub, file, line) {
+  const lockPath = path.join(dir, 'mock-send.lock');
+  if (sub === 'reconcile') {
+    const sl = M.scen.signerLock; const held = !!sl && ['pending-or-unsent', 'in-progress', 'lock-unreadable'].includes(sl.status);
+    return new MockOut(sl ? { status: sl.status, nonce: sl.nonce, lock_path: lockPath, lock_released: !held } : { status: 'no-lock', lock_path: lockPath }, held ? 5 : 0);
+  }
+  const w = M.world; const want = Number(file); const no = { command: sub, signed: false, broadcast: false, nonce: want };
+  if (M.scen.signerCancel === 'refuse') return new MockOut({ error: 'insufficient-gas-funds', detail: 'the signer\'s ETH balance does not cover the execution fee ceiling; nothing was signed', ...no }, 1);
+  if (want < w.nonce) return new MockOut({ error: 'nonce-too-low', detail: `nonce ${want} is already used`, ...no }, 1);
+  if (want > pendingOf(w)) return new MockOut({ error: 'nonce-gap', detail: `nonce ${want} is above the account's pending nonce`, ...no }, 1);
+  const hash = '0x' + sha(`cancel:${want}:${w.sends}`); const ih = keccakHex('0x');
+  w.block++; w.ts += 2; w.nonce = want + 1; w.sends++;
+  w.txs.push({ hash, nonce: want, from: w.holder, to: MOCK_OWNER, input_keccak256: ih, input_bytes: 0, block: w.block, status: '0x1', gas_used: '21000', effective_gas_price: w.gasPrice, l1_fee: '1000' });
+  M.saveWorld(); M.calls.cancels = (M.calls.cancels || []).concat([{ nonce: want, hash }]);
+  const base = { hash, nonce: want, input_hash: ih, from: w.holder, to: MOCK_OWNER, chain_id: 10 };
+  line({ event: 'broadcast', ...base, gas_limit: '21000', gas_clamped: false, lock_path: lockPath, log_path: path.join(dir, 'mock-signer.log.jsonl') });
+  return new MockOut({ event: 'confirmed', ...base, block_number: w.block, gas_used: '21000' }, 0);
+}
 function mockSignerMain(dir, argv) {
   const M = mockFiles(dir); const [sub, file, ...rest] = argv; const lines = []; let code = 0;
   const line = (o) => lines.push(JSON.stringify(o));
   try {
-    if (!['check', 'simulate', 'send'].includes(sub)) mockFail('supervised-entry-point', `mock signer: ${String(sub).slice(0, 30)} is a supervised entry point, never run by the planner`, 2);
+    if (!['check', 'simulate', 'send', 'clear-nonce', 'reconcile'].includes(sub)) mockFail('supervised-entry-point', `mock signer: ${String(sub).slice(0, 30)} is a supervised entry point, never run by the planner`, 2);
     M.calls.signer[sub] = (M.calls.signer[sub] || 0) + 1;
+    if (sub === 'reconcile' || sub === 'clear-nonce') throw mockSelfClear(M, dir, sub, file, line);
     let inp; try { inp = JSON.parse(projFile(file)); } catch (e) { if (e instanceof MockOut) throw e; mockFail('bad-input', 'the input file is not JSON', 2); }
     let rule = scopeRule(inp);
     if (!rule && sub === 'check' && M.scen.refuseCheckFile && path.basename(String(file)) === M.scen.refuseCheckFile) rule = 'approval-spender';
@@ -734,7 +758,7 @@ function wrapperLock(proj, runId, o = {}) {
   fs.writeFileSync(path.join(lockDir(proj), 'live-runs.txt'), (o.live || []).join('\n'));
 }
 function setupRecord(proj, over = {}) {
-  wj(path.join(proj, 'run', 'setup.deep-r3-trade.json'), { nonce_pinning: true, atomic_batches: false, first_successful_run: { run_id: 'a-supervised-run' }, autonomy: { enabled: true, authorized_at: '2026-10-06T00:00:00Z', signer_selftest_passed_at: '2026-10-06T00:00:00Z' }, schedule: { signer_allow_rule_added_at: '2026-10-06T00:00:00Z', time_limit_hours: 2, max_turns_run_ids: 5, cadence_hours: 24 }, ...over });
+  wj(path.join(proj, 'run', 'setup.deep-r3-trade.json'), { nonce_pinning: true, atomic_batches: false, autonomy: { enabled: true, authorized_at: '2026-10-06T00:00:00Z', signer_selftest_passed_at: '2026-10-06T00:00:00Z' }, schedule: { signer_allow_rule_added_at: '2026-10-06T00:00:00Z', time_limit_hours: 2, max_turns_run_ids: 5, cadence_hours: 24 }, ...over });
 }
 function snapshot(L, rid) { const s = path.join(L.root, 'snap-' + rid); rmrf(s); fs.cpSync(path.join(L.proj, 'run', rid), path.join(s, 'run'), { recursive: true }); fs.copyFileSync(path.join(L.mock, 'world.json'), path.join(s, 'world.json')); return s; }
 function restore(L, rid, s) { rmrf(path.join(L.proj, 'run', rid)); fs.cpSync(path.join(s, 'run'), path.join(L.proj, 'run', rid), { recursive: true }); fs.copyFileSync(path.join(s, 'world.json'), path.join(L.mock, 'world.json')); rmrf(lockDir(L.proj)); }
@@ -896,10 +920,25 @@ async function libSection(L) {
     ok(lib.isArmForecastMethod('deep-r3-trade D, forecast file: a pool of three forecasters, averaged'), 'the forecast-file mark (run-ids of 23 to 25 Oct 2026)');
     for (const m of ['a pool of three forecasters, averaged', 'seer-trade D (D-base-forecast.md) on its own', 'csv', '', null, undefined, 42]) ok(!lib.isArmForecastMethod(m), `${clip(m)} counted as this arm's`);
   });
-  await test('lib: the signer runner refuses info, reconcile, sweep-*, clear-nonce and allowlist-init, and any send flag but --nonce <n>, before spawning', async () => {
-    for (const sub of ['info', 'reconcile', 'sweep-eth', 'sweep-token', 'clear-nonce', 'allowlist-init']) { const r = await lib.runSigner({ ...cfg, signerPath: 'never-run' }, sub, 'run/mine/a.json').then(() => 'ran', (e) => e.code); ok(r === 'internal', `${sub}: ${r}`); }
+  await test('lib: the signer runner refuses info, sweep-* and allowlist-init, a clear-nonce with anything but a bare nonce, a reconcile with any argument, and any send flag but --nonce <n>, before spawning', async () => {
+    for (const sub of ['info', 'sweep-eth', 'sweep-token', 'allowlist-init']) { const r = await lib.runSigner({ ...cfg, signerPath: 'never-run' }, sub, 'run/mine/a.json').then(() => 'ran', (e) => e.code); ok(r === 'internal', `${sub}: ${r}`); }
+    for (const [sub, file, extra] of [['clear-nonce', 'run/mine/a.json', []], ['clear-nonce', '07', []], ['clear-nonce', '7', ['--nonce', '7']], ['clear-nonce', undefined, []], ['reconcile', 'run/mine/a.json', []], ['reconcile', null, ['--force']]]) {
+      const r = await lib.runSigner({ ...cfg, signerPath: 'never-run' }, sub, file, extra).then(() => 'ran', (e) => e.code); ok(r === 'internal', `${sub} ${JSON.stringify([file, extra])}: ${r}`);
+    }
     const r = await lib.runSigner({ ...cfg, signerPath: 'never-run' }, 'send', 'run/mine/a.json', ['--force']).then(() => 'ran', (e) => e.code); ok(r === 'internal', `send --force: ${r}`);
     const r2 = await lib.runSigner({ ...cfg, signerPath: 'never-run' }, 'check', '../outside.json').then(() => 'ran', (e) => e.code); ok(r2 === 'path_traversal', `check ../: ${r2}`);
+  });
+  await test('lib: a scheduled run\'s own cancel and reconcile reach the signer as `clear-nonce <n>` and a bare `reconcile` (mock signer: the cancel mined at exactly n, a zero-value transaction to the owner; a used nonce refused before signing; no send-lock)', async () => {
+    const W0 = freshWorld(); setWorld(L, W0); rmrf(path.join(L.mock, 'calls.json')); fs.writeFileSync(path.join(L.mock, 'scenario.json'), '{}');
+    const c = await lib.runSigner(cfg, 'clear-nonce', String(W0.nonce), []);
+    const bc = c.lines.find((j) => j.event === 'broadcast');
+    ok(c.exit === 0 && c.last.event === 'confirmed' && bc && bc.nonce === W0.nonce && lc(bc.to) === MOCK_OWNER && bc.input_hash === keccakHex('0x') && c.last.hash === bc.hash, JSON.stringify(c.lines));
+    const k = await lib.runSigner(cfg, 'clear-nonce', String(W0.nonce), []);
+    ok(k.exit === 1 && k.last.error === 'nonce-too-low' && k.last.signed === false && !k.lines.some((j) => j.event === 'broadcast'), JSON.stringify(k.last));
+    const r = await lib.runSigner(cfg, 'reconcile', null, []);
+    const calls = rj(path.join(L.mock, 'calls.json'));
+    ok(r.exit === 0 && r.last.status === 'no-lock' && calls.signer['clear-nonce'] === 2 && calls.signer.reconcile === 1 && calls.cancels.length === 1, JSON.stringify({ last: r.last, signer: calls.signer, cancels: calls.cancels }));
+    setWorld(L, freshWorld()); rmrf(path.join(L.mock, 'calls.json'));
   });
   await test('lib: rate-limit text is transient (the public RPC answers a rate limit as a plain rpc_error): re-run, then the answer', async () => {
     ok(['exceeded its requests per second capacity', 'over rate limit', 'Too Many Requests', 'HTTP 429', 'at capacity'].every((t) => lib.RATE_LIMIT_TEXT.test(t)), 'RATE_LIMIT_TEXT');
@@ -1175,6 +1214,20 @@ async function repairSection(root) {
   const w = (rel, o) => { const p = path.join(proj, rel); fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, typeof o === 'string' ? o : JSON.stringify(o)); };
   const ex = (rel) => exists(path.join(proj, rel));
   const chain = { latest: N, pending: N, receipt: null, blockTxs: [] };
+  // clear-nonce <n> as the stub chain meets it (a scheduled run's own cancel, exec-core): chain.cancel unset mines a
+  // zero-value transaction to the owner at n in a new head block; 'refuse' is the signer's gas refusal (nothing signed);
+  // 'old-lands' finds n used by the old transaction, which landed first (nonce-too-low)
+  const OWNER = '0x' + '0b'.repeat(20); const CANCEL_H = '0x' + 'ca'.repeat(32); const EMPTY_KECCAK = '0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470';
+  const stubCancel = (n) => {
+    chain.cancels = (chain.cancels || 0) + 1;
+    const no = (error) => { const last = { error, detail: 'nothing was signed or broadcast', command: 'clear-nonce', signed: false, broadcast: false }; return { exit: 1, last, lines: [last] }; };
+    if (chain.cancel === 'refuse') return no('insufficient-gas-funds');
+    if (chain.cancel === 'old-lands') { Object.assign(chain, { latest: n + 1, pending: n + 1, receipt: receiptOf() }); return no('nonce-too-low'); }
+    const head = (chain.head || 1005) + 1;
+    Object.assign(chain, { latest: n + 1, pending: n + 1, head, blockTxs: [...chain.blockTxs, { block: head, hash: CANCEL_H, nonce: n, to: OWNER, input_keccak256: EMPTY_KECCAK }] });
+    const bc = { event: 'broadcast', hash: CANCEL_H, nonce: n, input_hash: EMPTY_KECCAK, from: H0, to: OWNER }; const cf = { ...bc, event: 'confirmed', block_number: head, gas_used: '21000' };
+    return { exit: 0, last: cf, lines: [bc, cf] };
+  };
   const stubCtx = (runId, sub = 'wake') => {
     const c = lib.makeContext({ cfg, sub, runId }); c.holder = () => H0;
     c.helper = async (args) => {
@@ -1186,6 +1239,15 @@ async function repairSection(root) {
       throw new Error('unexpected helper call ' + JSON.stringify(args));
     };
     c.signer = async (sub2, file, extra, o) => {
+      // a scheduled run's own cancel and reconcile (exec-core): chain.cancel and chain.reconcile say what they meet. The
+      // arguments exec-core passes must pass lib.runSigner's own checks (a signer path that does not exist: a refusal
+      // before spawning is the only 'internal'); chain.badArgs collects any that would not
+      if (sub2 === 'clear-nonce' || sub2 === 'reconcile') {
+        const v = await lib.runSigner({ ...cfg, signerPath: path.join(proj, 'no-such-signer.cjs') }, sub2, file, extra).then(() => 'ran', (e) => e.code);
+        if (v === 'internal') chain.badArgs = (chain.badArgs || []).concat([`${sub2} ${JSON.stringify([file, extra])}`]);
+      }
+      if (sub2 === 'clear-nonce') return stubCancel(Number(file));
+      if (sub2 === 'reconcile') { chain.reconciles = (chain.reconciles || 0) + 1; const last = chain.reconcile || { status: 'no-lock' }; return { exit: last.lock_released === false ? 5 : 0, last, lines: [last] }; }
       // the signer prints its broadcast event, then fails waiting for the receipt (exit 5): an unclear outcome
       const ev = { event: 'broadcast', hash: TXH, nonce: N, input_hash: DATA_HASH, from: H0 }; o.onLine(JSON.stringify(ev), ev);
       const last = { error: 'receipt-timeout', detail: 'no receipt within the wait', signed: true, broadcast: true }; o.onLine(JSON.stringify(last), last);
@@ -1231,23 +1293,84 @@ async function repairSection(root) {
   });
   // ---- a not-sent finding on a signer that cannot pin the nonce
   const R1 = 'rp-notsent-1';
-  const sendOnce = async (pin) => {
+  // one send of R1 that reads Not sent; a scheduled run's (the wrapper's lock, o.mode unset) clears it itself, a supervised
+  // session's batch (its own lock) never; o.cancel and o.reconcile set what the cancel and the reconcile meet
+  const sendOnce = async (pin, o = {}) => {
     rmrf(path.join(proj, 'run', R1)); arm(R1);
     w(`run/${R1}/g-tx/tx-n${N}.json`, { calls: [{ to: TO, data: '0x1234', value: '0' }], gasLimit: '100000' });
     const c = stubCtx(R1, 'exec'); const e = X.makeEnv(c, { step: 'G', holder: H0, setup: { nonce_pinning: pin } });
     const owner = JSON.stringify({ pid: 4242, process_start_time: 'x', host: 'h', started_at: new Date().toISOString(), stage: 'claude-p', run_id: R1 });
-    w('run/.lock.deep-r3-trade/owner.txt', owner); w('run/.lock.deep-r3-trade/live-runs.txt', ''); e.lock = { mode: 'wrapper', taken: false, text: owner };
-    Object.assign(chain, { latest: N, pending: N, receipt: null, blockTxs: [] });
+    w('run/.lock.deep-r3-trade/owner.txt', owner); w('run/.lock.deep-r3-trade/live-runs.txt', ''); e.lock = { mode: o.mode || 'wrapper', taken: o.mode === 'supervised', text: owner };
+    // no real waits: each wait is recorded in chain.sleeps, and o.onSleep(ms) may change the world while it lasts
+    e.sleep = async (ms) => { chain.sleeps.push(ms); if (o.onSleep) o.onSleep(ms); }; if (o.deadlineMs) e.deadlineMs = o.deadlineMs;
+    Object.assign(chain, { latest: N, pending: N, receipt: null, blockTxs: [], head: undefined, cancel: o.cancel, reconcile: o.reconcile, cancels: 0, reconciles: 0, sleeps: [], badArgs: undefined });
     let s = null; try { await X.broadcast(e, new X.Book(cfg, R1), { label: 'split (test)', to: TO, signer_input_file: `run/${R1}/g-tx/tx-n${N}.json`, gas_limit: '100000' }, N, DATA_HASH, {}); } catch (x) { s = x; }
     rmrf(path.join(proj, 'run', '.lock.deep-r3-trade'));
     return s;
   };
-  await test('not-sent on a signer that cannot pin the nonce: the stop keeps inflight.json (no settlement), keep_aborted; a supervised run-id (no wake-status.json) is therefore not final', async () => {
-    const s = await sendOnce(false);
-    ok(s && s.cause === 'not-sent' && s.fields.keep_aborted === true && ex(`run/${R1}/inflight.json`) && !ex(`run/${R1}/inflight.settled.json`), JSON.stringify(s && { cause: s.cause, fields: s.fields }));
+  const cancelsOf = (d) => (ex(`run/${d}/nonce-cancels.json`) ? JSON.parse(fs.readFileSync(path.join(proj, 'run', d, 'nonce-cancels.json'), 'utf8')) : []);
+  // a scheduled run's sending env for the repair: the wrapper's lock (owner.txt naming that run-id) and no real waits
+  const wrapped = (c, today) => {
+    const e = env(c, false); const owner = JSON.stringify({ pid: 4242, process_start_time: 'x', host: 'h', started_at: new Date().toISOString(), stage: 'claude-p', run_id: today });
+    w('run/.lock.deep-r3-trade/owner.txt', owner); w('run/.lock.deep-r3-trade/live-runs.txt', '');
+    e.lock = { mode: 'wrapper', taken: false, text: owner }; e.sleep = async () => {}; return e;
+  };
+  await test('not-sent on a signer that cannot pin the nonce, in a supervised session (no cancel of its own): the stop keeps inflight.json (no settlement), keep_aborted; a supervised run-id (no wake-status.json) is therefore not final', async () => {
+    const s = await sendOnce(false, { mode: 'supervised' });
+    ok(s && s.cause === 'not-sent' && s.fields.keep_aborted === true && ex(`run/${R1}/inflight.json`) && !ex(`run/${R1}/inflight.settled.json`) && chain.cancels === 0 && !ex(`run/${R1}/nonce-cancels.json`), JSON.stringify(s && { cause: s.cause, fields: s.fields }));
     ok(HB.isFinalRun(stubCtx('rp-probe'), R1) === false, 'a supervised run-id with the not-sent inflight.json counts as final');
   });
-  await test('not-sent, two wakes: each start-of-run repair re-settles nonce n and blocks every send, never finalizing; an operator\'s cancel at n (a foreign transaction) then settles it and the run-id is finalized', async () => {
+  await test('not-sent in a scheduled run (G section 8, Nonce pinning): read again, then the run\'s own cancel (clear-nonce at n) is mined; n settles Not sent with the cancel as the foreign transaction, inflight.json renamed, the reconcile releases the send-lock, the stop does not keep the wake aborted, nonce-cancels.json records it', async () => {
+    const s = await sendOnce(false); const k = cancelsOf(R1);
+    ok(s && s.cause === 'not-sent' && s.fields.keep_aborted === false && s.fields.foreign && s.fields.foreign.hash === CANCEL_H && !ex(`run/${R1}/inflight.json`) && ex(`run/${R1}/inflight.settled.json`) && /the run's own cancel/.test(s.notes), JSON.stringify(s && { cause: s.cause, notes: s.notes, fields: s.fields }));
+    ok(k.length === 1 && k[0].status === 'confirmed' && k[0].hash === CANCEL_H && k[0].nonce === N && k[0].by === R1 && chain.cancels === 1 && chain.reconciles === 1, JSON.stringify({ k, cancels: chain.cancels, reconciles: chain.reconciles }));
+    ok(chain.sleeps[0] === X.STUCK_RECHECK_MS && !chain.badArgs, `the re-read wait first (${JSON.stringify(chain.sleeps)}); lib.runSigner refuses ${JSON.stringify(chain.badArgs)}`);
+  });
+  await test('not-sent in a scheduled run, the old transaction landing during the minute\'s re-read: no cancel is sent, n settles Landed, the send is confirmed and its send-lock released', async () => {
+    const s = await sendOnce(false, { onSleep: (ms) => { if (ms === X.STUCK_RECHECK_MS) Object.assign(chain, { latest: N + 1, pending: N + 1, receipt: receiptOf() }); } });
+    const sends = ex(`run/${R1}/exec-sends.json`) ? JSON.parse(fs.readFileSync(path.join(proj, 'run', R1, 'exec-sends.json'), 'utf8')) : [];
+    ok(s === null && chain.cancels === 0 && !ex(`run/${R1}/nonce-cancels.json`) && sends.length === 1 && sends[0].tx_hash === TXH && ex(`run/${R1}/inflight.settled.json`) && chain.reconciles === 1 && !chain.badArgs, JSON.stringify({ s: s && { cause: s.cause, notes: s.notes }, sends, cancels: chain.cancels, sleeps: chain.sleeps }));
+  });
+  await test('not-sent in a scheduled run whose arm lock is no longer its own by the cancel: no cancel is sent (named in the stop), the stop keeps inflight.json and the wake aborted', async () => {
+    const other = JSON.stringify({ pid: 4343, process_start_time: 'y', host: 'h', started_at: new Date().toISOString(), stage: 'claude-p', run_id: 'another-run' });
+    const s = await sendOnce(false, { onSleep: (ms) => { if (ms === X.STUCK_RECHECK_MS) w('run/.lock.deep-r3-trade/owner.txt', other); } });
+    ok(s && s.cause === 'not-sent' && s.fields.keep_aborted === true && ex(`run/${R1}/inflight.json`) && chain.cancels === 0 && !ex(`run/${R1}/nonce-cancels.json`) && /no cancel sent \(run\/\.lock\.deep-r3-trade is no longer this run's\)/.test(s.notes), JSON.stringify(s && { cause: s.cause, notes: s.notes }));
+  });
+  await test('not-sent in a scheduled run, the cancel refused by the signer (no gas): two calls, both recorded refused, no reconcile; the stop keeps inflight.json and the wake aborted', async () => {
+    const s = await sendOnce(false, { cancel: 'refuse' }); const k = cancelsOf(R1);
+    ok(s && s.cause === 'not-sent' && s.fields.keep_aborted === true && ex(`run/${R1}/inflight.json`) && k.length === 2 && k.every((x) => x.status === 'refused' && /insufficient-gas-funds/.test(x.detail)) && chain.cancels === 2 && chain.reconciles === 0, JSON.stringify({ s: s && { cause: s.cause, notes: s.notes, fields: s.fields }, k }));
+  });
+  await test('not-sent in a scheduled run, the old transaction landing first (the cancel meets nonce-too-low): n settles Landed, the send is confirmed and recorded, the send-lock released; no stop', async () => {
+    const s = await sendOnce(false, { cancel: 'old-lands' }); const k = cancelsOf(R1);
+    const sends = JSON.parse(fs.readFileSync(path.join(proj, 'run', R1, 'exec-sends.json'), 'utf8'));
+    ok(s === null && sends.length === 1 && sends[0].tx_hash === TXH && ex(`run/${R1}/inflight.settled.json`) && k.length === 1 && k[0].status === 'refused' && /nonce-too-low/.test(k[0].detail) && chain.reconciles === 1, JSON.stringify({ s: s && { cause: s.cause, notes: s.notes }, sends, k }));
+  });
+  await test('not-sent in a scheduled run with under five minutes before its deadline: no cancel is sent (named in the stop), the stop keeps inflight.json for the next run', async () => {
+    const s = await sendOnce(false, { deadlineMs: Date.now() + 60 * 1000 });
+    ok(s && s.cause === 'not-sent' && s.fields.keep_aborted === true && ex(`run/${R1}/inflight.json`) && chain.cancels === 0 && !ex(`run/${R1}/nonce-cancels.json`) && /no cancel sent \(too little time/.test(s.notes), JSON.stringify(s && { cause: s.cause, notes: s.notes }));
+  });
+  await test('the start-of-run repair of a scheduled run consumes an earlier run\'s stuck nonce itself: its clear-nonce is mined, n settles Not sent (foreign), the reconcile runs, the run-id is finalized "repaired by", nothing blocks the wake\'s sends', async () => {
+    const s = await sendOnce(false, { mode: 'supervised' }); ok(s && s.cause === 'not-sent' && s.fields.keep_aborted === true, JSON.stringify(s && s.cause));
+    w(`run/${R1}/wake-status.json`, { run_id: R1, status: 'aborted', notes: 'not-sent at nonce 7' });
+    const today = 'rp-wake-6'; const c = stubCtx(today); const e = wrapped(c, today);
+    try {
+      Object.assign(chain, { latest: N, pending: N, receipt: null, blockTxs: [], head: undefined, cancel: undefined, reconcile: undefined, cancels: 0, reconciles: 0, badArgs: undefined });
+      const rep = await WK.repair(c, e, [], { recover: true });
+      const ws = JSON.parse(fs.readFileSync(path.join(proj, 'run', R1, 'wake-status.json'), 'utf8')); const k = cancelsOf(R1);
+      ok(!rep.blockSends && !ex(`run/${R1}/inflight.json`) && ex(`run/${R1}/inflight.settled.json`) && ws.status === 'nothing-to-do' && /repaired by rp-wake-6/.test(ws.notes) && rep.notes.some((x) => /the run's own cancel/.test(x)), JSON.stringify({ rep, ws }));
+      ok(k.length === 1 && k[0].status === 'confirmed' && k[0].by === today && /start-of-run repair of rp-wake-6/.test(k[0].trigger) && chain.cancels === 1 && chain.reconciles === 1 && !chain.badArgs, JSON.stringify({ k, cancels: chain.cancels, reconciles: chain.reconciles, badArgs: chain.badArgs }));
+    } finally { rmrf(path.join(proj, 'run', '.lock.deep-r3-trade')); Object.assign(chain, { head: undefined, cancels: 0, reconciles: 0 }); }
+  });
+  await test('the start-of-run repair of a scheduled run: a send-lock the signer\'s reconcile keeps (its transaction not settled) blocks every send of the wake, named in its notes', async () => {
+    const today = 'rp-wake-7'; const c = stubCtx(today); const e = wrapped(c, today);
+    try {
+      Object.assign(chain, { latest: N, pending: N, receipt: null, blockTxs: [], reconcile: { status: 'pending-or-unsent', nonce: 9, lock_released: false }, reconciles: 0 });
+      const rep = await WK.repair(c, e, [], { recover: true });
+      ok(/send-lock is held \(its reconcile: pending-or-unsent\)/.test(rep.blockSends || '') && chain.reconciles === 1 && rep.notes.some((x) => /reconcile: pending-or-unsent \(nonce 9\)/.test(x)), JSON.stringify(rep));
+    } finally { rmrf(path.join(proj, 'run', '.lock.deep-r3-trade')); Object.assign(chain, { reconcile: undefined, reconciles: 0 }); }
+  });
+  await test('not-sent, two wakes: each start-of-run repair that sends nothing (no recovery, no lock) re-settles nonce n and blocks every send, never finalizing; an operator\'s cancel at n (a foreign transaction) then settles it and the run-id is finalized', async () => {
+    const s0 = await sendOnce(false, { mode: 'supervised' }); ok(s0 && s0.cause === 'not-sent' && s0.fields.keep_aborted === true, JSON.stringify(s0 && s0.cause));
     w(`run/${R1}/wake-status.json`, { run_id: R1, status: 'aborted', notes: 'not-sent at nonce 7' });
     for (const today of ['rp-wake-2', 'rp-wake-3']) {
       const c = stubCtx(today); Object.assign(chain, { latest: N, pending: N, receipt: null, blockTxs: [] });
@@ -1260,7 +1383,7 @@ async function repairSection(root) {
     ok(!rep.blockSends && !ex(`run/${R1}/inflight.json`) && ex(`run/${R1}/inflight.settled.json`) && ws.status === 'nothing-to-do' && /repaired by rp-wake-4/.test(ws.notes), JSON.stringify({ rep, ws }));
   });
   await test('not-sent, then an operator\'s cancel mined 40,000 blocks later: the next wake\'s repair settles it from the nonce at past blocks, reading one block, and finalizes the run-id', async () => {
-    const s = await sendOnce(false); ok(s && s.cause === 'not-sent', JSON.stringify(s && s.cause));
+    const s = await sendOnce(false, { mode: 'supervised' }); ok(s && s.cause === 'not-sent' && s.fields.keep_aborted === true, JSON.stringify(s && s.cause));
     w(`run/${R1}/wake-status.json`, { run_id: R1, status: 'aborted', notes: 'not-sent at nonce 7' });
     const AT = 1005 + 40000;
     try {
@@ -1271,9 +1394,9 @@ async function repairSection(root) {
       ok(!rep.blockSends && ex(`run/${R1}/inflight.settled.json`) && ws.status === 'nothing-to-do' && /repaired by rp-wake-5/.test(ws.notes) && chain.blockReads === 1, JSON.stringify({ rep, ws, blockReads: chain.blockReads }));
     } finally { Object.assign(chain, { head: undefined, nonceAt: undefined, blockReads: 0 }); }
   });
-  await test('not-sent on a signer that CAN pin the nonce: settled at once (inflight.json renamed), the stop does not keep the wake aborted', async () => {
+  await test('not-sent on a signer that CAN pin the nonce, in a scheduled run: settled at once (inflight.json renamed), no cancel and no reconcile, the stop does not keep the wake aborted', async () => {
     const s = await sendOnce(true);
-    ok(s && s.cause === 'not-sent' && s.fields.keep_aborted === false && !ex(`run/${R1}/inflight.json`) && ex(`run/${R1}/inflight.settled.json`), JSON.stringify(s && { cause: s.cause, fields: s.fields }));
+    ok(s && s.cause === 'not-sent' && s.fields.keep_aborted === false && !ex(`run/${R1}/inflight.json`) && ex(`run/${R1}/inflight.settled.json`) && chain.cancels === 0 && chain.reconciles === 0 && !ex(`run/${R1}/nonce-cancels.json`), JSON.stringify(s && { cause: s.cause, fields: s.fields, cancels: chain.cancels, reconciles: chain.reconciles }));
   });
   // ---- the missing fills.json rows (I-setup.md I.2 section 6 (c)): a transaction that landed after its run stopped gets
   // its row appended from the signed calldata, every row already there kept; some but not all of a group landed is half-done
@@ -2072,6 +2195,15 @@ async function wakeSection(root, csvStoreFrom) {
       const r = P(['wake', 'pt-wake-g']); const ws = exists(rf('pt-wake-g', 'wake-status.json')) ? rj(rf('pt-wake-g', 'wake-status.json')) : {};
       ok(r.code === 3 && ws.status === 'aborted' && /autonomy\.enabled is not true/.test(ws.notes) && exists(rf('pt-wake-g', 'report.md')) && !exists(rf('pt-wake-g', 'candidates.json')), say(r) + JSON.stringify(ws));
     } finally { setupRecord(W.proj); rmrf(lockDir(W.proj)); }
+  });
+  // the supervised first run is no longer a gate (28 Oct 2026): the default setup record above has no first_successful_run,
+  // so every wake case past the gates proves it; this one says it outright
+  await test('gates: a setup record with no first_successful_run passes; the four gates are autonomy.enabled, authorized_at, signer_selftest_passed_at and signer_allow_rule_added_at', () => {
+    const X = require(path.join(SCRIPTS, 'planner', 'exec-core.cjs'));
+    const full = { autonomy: { enabled: true, authorized_at: 'x', signer_selftest_passed_at: 'x' }, schedule: { signer_allow_rule_added_at: 'x' } };
+    ok(JSON.stringify(X.gateProblems(full)) === '[]', JSON.stringify(X.gateProblems(full)));
+    ok(JSON.stringify(X.gateProblems({ first_successful_run: null, ...full })) === '[]', 'first_successful_run null still gates');
+    ok(JSON.stringify(X.gateProblems({})) === JSON.stringify(['autonomy.enabled is not true', 'autonomy.authorized_at is null', 'autonomy.signer_selftest_passed_at is null', 'schedule.signer_allow_rule_added_at is null']), JSON.stringify(X.gateProblems({})));
   });
   await test('wake: the gates (autonomy.authorized_at null) -> exit 3, wake-status.json aborted naming the field, report.md written, nothing else run', () => {
     setupRecord(W.proj, { autonomy: { enabled: true, authorized_at: null, signer_selftest_passed_at: '2026-10-06T00:00:00Z' } }); wrapperLock(W.proj, 'pt-wake-a');

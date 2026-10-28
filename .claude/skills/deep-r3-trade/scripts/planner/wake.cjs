@@ -2,8 +2,8 @@
 // in the skill's order and with its stop rules:
 //   0. only inside the wrapper: run/.lock.deep-r3-trade held by the wrapper (stage "claude-p") naming this run-id; its
 //      started_at is the run's start, its live-runs.txt the run-ids never touched;
-//   1. wake-status.json written `aborted` FIRST; then the five gates of I.2 section 1 and G section 8 Two modes
-//      (first_successful_run, autonomy.enabled, autonomy.authorized_at, autonomy.signer_selftest_passed_at,
+//   1. wake-status.json written `aborted` FIRST; then the four gates of I.2 section 1 and G section 8 Two modes
+//      (autonomy.enabled, autonomy.authorized_at, autonomy.signer_selftest_passed_at,
 //      schedule.signer_allow_rule_added_at): a null or false one is named in notes, report.md is written and the wake
 //      stops (status stays aborted); a setup in signer mode (b), signer_mode executor-session-key, stops the same way
 //      first, cause unsupported-signer-mode (I.2 section 7, The planner);
@@ -12,8 +12,10 @@
 //      resumed at the next wake), a chain-mismatch closed, the missing fills.json row of a transaction that landed after
 //      its run stopped appended (from the signed calldata, never a row removed); then, once every nonce is settled and
 //      nothing blocks a send, G section 8 step 4's recovery rule on each half-done group (exec.recoverGroup, sent under the
-//      wrapper's lock in that run-id); a run-id finalized with "repaired by" once nothing of it is half-done; a Pending
-//      nonce (or a not-sent finding on a signer that cannot pin the nonce) blocks every send of this wake;
+//      wrapper's lock in that run-id); a run-id finalized with "repaired by" once nothing of it is half-done; a not-sent
+//      finding on a signer that cannot pin the nonce is first consumed by the wake's own cancel, and once every nonce is
+//      settled the signer's reconcile releases a settled send's lock (exec-core, G section 8 Nonce pinning); a Pending
+//      nonce, a not-sent finding the cancel did not consume, or a send-lock reconcile keeps blocks every send of this wake;
 //   3. Half A: c, d (the stored CSV only), e, then the PSM3 ramp of any USDC and USDS at the holder (planner/ramp.cjs,
 //      I-setup.md I.1 section 5, I.2 section 2 Half A: its own simulated and sent batch, the run's first broadcast; a
 //      ramp that stops, is refused or leaves a nonce Pending ends Half A before F, kept aborted when a nonce is
@@ -86,7 +88,13 @@ async function repair(ctx, env, live, o = {}) {
       const inf = book.readJson('inflight.json', null);
       const n = inf && Number.isInteger(inf.nonce) ? inf.nonce : null;
       if (n === null) { out.notes.push(`run ${d}: inflight.json is unreadable; nothing is sent until an operator settles it`); out.blockSends = out.blockSends || `run ${d}'s inflight.json is unreadable`; continue; }
-      const s = await X.settleNonce(env, book, n); // bounded by env.deadlineMs, resumed at the next wake (exec-core)
+      let s = await X.settleNonce(env, book, n); // bounded by env.deadlineMs, resumed at the next wake (exec-core)
+      // a not-sent finding on a signer that cannot pin the nonce: the wake's own cancel consumes n first, and the outcome
+      // below is the settlement after it (G section 8, Nonce pinning; exec-core cancelStuckNonce)
+      if (s.outcome === 'not-sent' && !s.foreign && !env.pin && o.recover && X.selfClears(env)) {
+        const c = await X.cancelStuckNonce(env, book, n, { trigger: `the start-of-run repair of ${ctx.runId}` });
+        s = c.settlement; out.notes.push(`run ${d}: ${c.note}`);
+      }
       if (s.outcome === 'chain-mismatch') {
         for (const a of X.liveAttempts(book.attempts(), n)) book.retire(n, a.calldata_hash || null, 'chain-mismatch');
         book.settleInflight(); finalizeRun(d, 'chain-mismatch');
@@ -95,9 +103,9 @@ async function repair(ctx, env, live, o = {}) {
       if (s.outcome === 'pending') { out.blockSends = out.blockSends || `run ${d} nonce ${n} is Pending (${s.via}; hash ${inf.tx_hash || 'none recorded'})`; out.notes.push(`run ${d}: nonce ${n} is Pending, hash ${inf.tx_hash || 'none recorded'} (${s.via}): nothing is sent until it settles; if it never mines, clear it in a supervised session (I-setup.md I.2 section 6)`); continue; }
       if (s.outcome === 'not-sent' && !env.pin && !s.foreign) {
         // no settlement on a signer that cannot pin the nonce (G section 8, Nonce pinning): inflight.json stays, the run-id
-        // stays non-final, and every later wake re-settles n until the old transaction lands or a foreign one consumes n
+        // stays non-final, and every later wake re-settles n, and sends its own cancel, until a transaction consumes n
         out.blockSends = out.blockSends || `run ${d} nonce ${n} settled Not sent and the signer cannot pin the nonce (G section 8, Nonce pinning)`;
-        out.notes.push(`run ${d}: nonce ${n} reads Not sent (${s.via}) and the signer cannot pin the nonce: nothing is sent until it lands or an operator consumes nonce ${n} with a cancel transaction (I-setup.md I.2 section 6)`);
+        out.notes.push(`run ${d}: nonce ${n} reads Not sent (${s.via}) and the signer cannot pin the nonce: nothing is sent until a transaction consumes nonce ${n}; the next wake sends its own cancel again, or an operator sends one (I-setup.md I.2 section 6)`);
         continue;
       }
       book.settleInflight();
@@ -135,6 +143,14 @@ async function repair(ctx, env, live, o = {}) {
     // a half-done group (some but not all of its transactions landed, no recovery settled it) goes to pass 2
     if (pr.half_done.length) { halfDone.push({ d, groups: pr.half_done }); continue; }
     finalizeRun(d, null);
+  }
+  // the signer's own release of a settled send's lock (exec-core releaseSendLock), once every nonce of the scan is settled
+  // and before this wake's first send: a lock an earlier run left (a signer whose state folder outlives the run) would
+  // otherwise refuse every send; a lock whose transaction is not settled, or a live process's, stays and blocks them
+  if (o.recover && X.selfClears(env) && !out.blockSends) {
+    const rl = await X.releaseSendLock(env);
+    if (rl.note) out.notes.push(rl.note);
+    if (['pending-or-unsent', 'in-progress', 'lock-unreadable'].includes(rl.status)) out.blockSends = `the signer's send-lock is held (its reconcile: ${rl.status})`;
   }
   // pass 2: the recovery rule (G section 8 step 4, Start-of-run repair) on each half-done group, in its own run-id, judged
   // against the current chain state; the run-id is finalized once each of its groups is completed, unwound, has nothing
