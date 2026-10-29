@@ -132,10 +132,12 @@ git clone https://github.com/sunvalley1/r3-originality-bot.git ../r3-trading
 `run/` is where every run writes its records; git ignores it until step 5.
 
 **You:** let the place you chose reach the private repository. For Claude, install the Claude GitHub App
-([github.com/apps/claude](https://github.com/apps/claude) → Configure), choose *Only select repositories* and add
-`r3-trading`. For ChatGPT in the cloud, give ChatGPT's GitHub connection access to `r3-trading`, with write (on
-GitHub: Settings → Applications → the ChatGPT app → Configure → *Only select repositories*). For ChatGPT on your
-own computer, nothing: the task works in this folder. A GitHub organization's owner may have to approve it.
+([github.com/apps/claude](https://github.com/apps/claude) → Configure). We recommend *All repositories*, so later bots
+work without changing it; *Only select repositories* with `r3-trading` added works too. For ChatGPT in the cloud,
+give ChatGPT's GitHub connection write access (on GitHub: Settings → Applications → the ChatGPT app → Configure):
+*All repositories* is recommended for the same reason, and *Only select repositories* with `r3-trading` works too.
+For ChatGPT on your own computer, nothing: the task works in this folder. A GitHub organization's owner may have to
+approve it.
 
 *Agent check:* `git remote get-url origin` is your private repository; a `public` remote pointing at
 `sunvalley1/r3-originality-bot` is expected; `git ls-remote origin` works.
