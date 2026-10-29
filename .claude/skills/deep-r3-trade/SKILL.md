@@ -44,7 +44,7 @@ through the reasoned pipeline that `seer-trade` orchestrates — so the two can 
 
 | Ask | Where it goes |
 |---|---|
-| "Set up a wallet for Round 3", "give me an R3 funding address", "check the R3 wallet", "I funded it", or "resume R3 wallet setup" | **I.1 only** in `steps/I-setup.md`, using `../evm-onchain/reference/wallet-onboarding.md`; reuse or create, verify signing, read balances and report trading readiness (atomic or sequential). No CSV, market run or schedule is required for wallet onboarding. |
+| "Set up a wallet for Round 3", "give me an R3 funding address", "check the R3 wallet", "I funded it", or "resume R3 wallet setup" | **I.1 only** in `steps/I-setup.md`, using `../evm-onchain/reference/wallet-onboarding.md`; reuse the signer or have the human make a wallet (SETUP.md step 2, I.1 §2), verify signing, read balances and report trading readiness (atomic or sequential). No CSV, market run or schedule is required for wallet onboarding. |
 | deep.seer.pm (its data host, `R3_DATA_HOST`), Deep Funding Round 3 Originality, "the 98 repo markets", the originality CSV, parent `0x37ab5cbe…` | **here** |
 | Any other Seer market, any other chain, any other contest or round on deep.seer.pm (including Round 2) | `seer-trade` |
 | "How does a Seer market work?", Router / ConditionalTokens / Reality.eth mechanics | `seer-protocol` |
@@ -132,7 +132,7 @@ arms — that is what lets a step from one arm drop into the other. I writes non
 | F | `steps/F-max-ev.md` | `blended.json`, `candidates.json` + *the holder's repo-token and child-Invalid balance per market (no UP/DOWN read)* | `allocation.json` | per market `set-sell`, or `merge-arb` then the sub-1 pair (3a, 3b), then greedy marginal EV; `objective: "max-ev"`, 98 independent per-market budgets, one repo token each: that market's repo tokens already held plus the new mint `M` |
 | G | `steps/G-mint-and-trade.md` | `allocation.json` | `fills.json` | mint (parent, then each middle), route each fill, simulate, **human approval** (supervised mode; in autonomous mode see *Two modes*), send once; later exit, then merge and redeem child → middle → parent |
 | H | `steps/H-no-learn.md` | `fills.json`, `base-forecast.json`, `blended.json`, `allocation.json`, `candidates.json` | `review.json`, once a market has settled | realised payouts, Brier three ways, PnL attribution — and update nothing; until then it writes no file and says `nothing settled yet` |
-| I | `steps/I-setup.md` | I.1: wallet setup/funding/resume request, public signer metadata and expected identity. I.2: the operator's answers at setup (I.2 §1) | `./run/setup.deep-r3-trade.json` | **I.1** reuse or create the wallet, verify signer and holder, report funding and atomic capability, then the PSM3 ramp/preflight. **I.2** the autonomous daily run — consent at setup, signer allowlist self-test, the setup run's clearance, stored CSV, run-id, the locks, the Claude Code routine, trade now and `CADENCE` (I.2 §7–§8). **Not swappable** — see *Architecture* |
+| I | `steps/I-setup.md` | I.1: wallet setup/funding/resume request, public signer metadata and expected identity. I.2: the operator's answers at setup (I.2 §1) | `./run/setup.deep-r3-trade.json` | **I.1** reuse the wallet or have the human make one (SETUP.md step 2), verify signer and holder, report funding and atomic capability, then the PSM3 ramp/preflight. **I.2** the autonomous daily run — consent at setup, signer allowlist self-test, the setup run's clearance, stored CSV, run-id, the locks, the Claude Code routine, trade now and `CADENCE` (I.2 §7–§8). **Not swappable** — see *Architecture* |
 
 **The run loop.** A and B are references, read when a step calls for them. For C–H **in that order** (I brackets them):
 
@@ -187,7 +187,7 @@ then every autonomous run (interval = CADENCE, declared in I.2 §8, or a trade n
 ```
 
 Enter I.1 automatically when an R3 trading request lacks a verified setup, and directly when the user
-asks to set up, fund, check or resume the wallet. Reuse the existing signer and refresh public checks;
+asks to set up, fund, check or resume the wallet. Reuse the configured signer and refresh public checks;
 if funds are missing, provide funding instructions and resume at I.1 after they arrive. Report **signing
 verified**, **funding ready** and **trading ready** separately, the last as atomic or sequential. Any signer
 that needs no human action per transaction may trade: a local encrypted EOA, an **EIP-7702 delegated EOA
@@ -480,17 +480,17 @@ autonomous mode of *Two modes* replaces only the per-batch "yes"; every other ru
   expanded budget, or autonomous mode, which needs its own standing authorization (*Two modes*). Outside that
   scope, each batch needs the approval above. Simulation,
   keep-whole groups and this arm's fixed forecasting/sizing method remain binding.
-- **The agent never sees a key.** Follow `steps/I-setup.md` I.1 §2 and the shared
-  `../evm-onchain/reference/wallet-onboarding.md`. Reuse the configured signer, or generate a dedicated
-  wallet inside the authorized local signer process. Only public metadata, address/signature checks,
-  balance results and transaction summaries may enter the conversation. Never ask for a key, print it,
-  open a credential file, decrypt credentials yourself, or dump environment variables. A human may
+- **The agent never sees a key, and never makes the wallet.** Follow `steps/I-setup.md` I.1 §2 and the shared
+  `../evm-onchain/reference/wallet-onboarding.md`. Reuse the configured signer; a new bot wallet is the human's
+  to make, with SETUP.md step 2's commands, which you hand over and never run. Only public metadata,
+  address/signature checks, balance results and transaction summaries may enter the conversation. Never ask for a
+  key, print it, open a credential file, decrypt credentials yourself, or dump environment variables. A human may
   also supply an existing signer through the interface; its custody option must be recorded. The OS-encrypted
   store (DPAPI on Windows, the login Keychain on macOS, libsecret or an encrypted keystore on Linux; I.1 §2) protects
   against other users and other machines, not against a process running as the same user; against the agent, the
   deny rules (I.1 §2) come first.
-  **Verify by address** — compare signer and holder with the identity supplied by the human or pinned
-  when the authorized setup created and announced the wallet; stop on a mismatch. G states the
+  **Verify by address** — compare signer and holder with the identity the human supplied (for the bot
+  wallet, the one `cast` printed at SETUP.md step 2); stop on a mismatch. G states the
   `BatchSigner` interface it needs (holder address, atomic batches or not, a gas-limit override, simulation;
   signing at a caller-given nonce is an optional capability, not a requirement, G §8 *Nonce pinning*) and `steps/I-setup.md` I.1 §7 adds `signerAddress()` and picks the custody option. Any signer that needs no
   human action per transaction may trade — `signer_mode` `local-encrypted-eoa | eip7702 | executor-session-key |
@@ -593,7 +593,7 @@ project root, the folder the human runs Claude Code in — never an absolute pat
 | the scoring — Brier three ways, PnL attribution, its refusal to learn | `steps/H-no-learn.md` |
 | the daily run's cadence (`CADENCE`, declared once in I.2 §8), `WAKE_AT`, `SCOUT_CADENCE`, `BANKROLL` (all holder balances), `STALE_APPROVAL` (supervised mode only), the lock's **path** (I.2 §8) — the lock's **mechanics** (I.2 §6) — the wallet, the signer mode and preflight (I.1) — the consent asked at setup, the `autonomy` record, the signer allowlist and its self-test (I.2) | `steps/I-setup.md` |
 | the reference chain helper, signer and planner (code, tests, READMEs, example configs) and how the operator installs them | `scripts/` — `steps/I-setup.md` I.2 §7 |
-| shared wallet creation/reuse, signer verification, funding/resume and public status tooling | `../evm-onchain/reference/wallet-onboarding.md` |
+| shared wallet reuse, signer verification, funding/resume and public status tooling | `../evm-onchain/reference/wallet-onboarding.md` |
 | an infrastructure address, gas ceiling, RPC or Uniswap fact (A) — an artifact shape or Router / CTF / Reality.eth mechanic (B) | `evm-onchain` — `seer-protocol`. **Shared: an edit here changes both arms, and a §10 shape change breaks every swap** |
 
 **The contract is the seam.** Steps talk through the six artifacts and nothing else — no shared memory, no field

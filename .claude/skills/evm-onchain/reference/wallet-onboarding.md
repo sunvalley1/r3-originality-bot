@@ -6,12 +6,18 @@ I.1 owns each arm's setup record; this reference owns the common intake and fund
 
 ## Create or reuse without exposing credentials
 
-Honor a wallet or signer the human already selected. If they ask the agent to set up a dedicated wallet
-on Windows, the preferred implementation is the repository's local encrypted EOA signer (the `wallet:*`
-tooling), where the checkout ships it. The request authorizes running its setup; do not hand the human a
-key-import tutorial or ask them to repeat permission already given. For another OS or network, use an
-available signer for that environment rather than run this Windows/Optimism implementation blindly.
+Honor a wallet or signer the human already selected. **deep-r3-trade's bot wallet is the human's to make**, in
+a terminal window of their own, with that repository's SETUP.md step 2 commands, which the agent hands over and
+never runs; the agent never makes one (no `wallet:*` tooling, no `wallet-setup` skill) and never uses or offers
+one an agent made in its own process (`run/wallet.json`), even one the human chose (I.1 section 2 in
+[deep-r3-trade's setup step](../../deep-r3-trade/steps/I-setup.md)).
+For seer-trade, if the human asks the agent to set up a dedicated wallet on Windows, the preferred
+implementation is the repository's local encrypted EOA signer (the `wallet:*` tooling), where the checkout
+ships it; the request authorizes running its setup, so do not hand them a key-import tutorial or ask them to
+repeat permission already given. For another OS or network, use an available signer for that environment
+rather than run this Windows/Optimism implementation blindly.
 
+Steps 1 to 4 are seer-trade's; deep-r3-trade runs none of them for its bot wallet (above).
 Run commands from the repository root. Read [the tool guide](../../../../tools/README.md) for command
 details. The pinned dependency is installed with `npm ci --ignore-scripts --no-fund` if missing; Foundry
 is not required for this implementation. Use the environment's normal permission mechanism for network
@@ -110,12 +116,12 @@ when the human says they funded it there. An RPC error means **unknown**, never 
 Add an `onboarding` block to `run/setup.json` or `run/setup.deep-r3-trade.json`. These are local bookkeeping,
 not additions to the six handoff artifact shapes. Record only public facts: expected address and its
 conversation source, signer/holder, signing verification time, observed balances/block, signer capability,
-applicable spending permission and the next action. Credential paths remain in `run/wallet.json`, not the
-arm's setup record. Do not put this installation's wallet address into reusable skill instructions.
+applicable spending permission and the next action. Credential paths stay out of the arm's setup record. Do not
+put this installation's wallet address into reusable skill instructions.
 
 | Status | Meaning and next step |
 |---|---|
-| `needs-wallet` | Select an existing signer or create one under the setup request. |
+| `needs-wallet` | Select an existing signer or create one under the setup request (deep-r3-trade: the human makes it, above). |
 | `needs-verification` | Offline possession or chain checks have not passed; diagnose without rotation. |
 | `needs-executor` | Information only: signing works, atomic batches are unavailable, so G runs keep-whole groups in sequential mode. Never a blocker for trading; an atomic backend (EIP-7702 recommended) is optional. |
 | `needs-funding` | Required gas or collateral is missing; give verified addresses and asset/network details. |

@@ -55,6 +55,9 @@ and only then go on. If they decline, do what they asked.
   `~/.claude/settings.json` (SETUP.md step 2): add them before any key file exists even if you are another agent,
   because steps 7 and 8 run Claude Code in this folder. Other agents keep to the rule themselves.
 - Never write code that reads, converts or encrypts a key. Use the commands in SETUP.md, which the person runs.
+- **Never make the bot's wallet yourself**, with any tool or skill (`wallet-setup` included), and never use or offer
+  one an agent made in its own process (`run/wallet.json`): the person makes it in their own terminal window
+  (SETUP.md step 2). Asked to create it, give them that step's option B commands and run none of them.
 - **In a supervised session the person approves each command.** Run in a mode that asks before every command (for
   Codex, an approval policy that asks; never a full-auto or bypass mode). Run `node r3.cjs planner exec ...`,
   `node r3.cjs planner halfb ... --send` and any `node <signer path> ...` command (`clear-nonce`, `reconcile`,
@@ -75,4 +78,5 @@ and only then go on. If they decline, do what they asked.
   snippet stops with `no claude ancestor`, add your agent's process name to its match (for example `codex`). In the
   Codex app, delete that marker yourself when the run's sends are done: it names the app's own process, which outlives
   the chat, so a scheduled task would treat that run-id as live and skip its repair, merges, redeems and scoring.
-- `SKILL.md` and `steps/` are the authority when this file, SETUP.md or the README disagree with them.
+- `.claude/skills/deep-r3-trade/SKILL.md` and its `steps/` are the authority when this file, SETUP.md or the README
+  disagree with them.

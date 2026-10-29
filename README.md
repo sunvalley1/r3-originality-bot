@@ -34,7 +34,7 @@ Each run does the following:
 | Path | What it is |
 |---|---|
 | `.claude/skills/deep-r3-trade/` | The skill: `SKILL.md` (overview), `steps/` (steps C to I), `routines/` (what the trading routine's agent does), `scripts/` (planner, chain helper, signer, the routine runner, and their tests) |
-| `.claude/skills/seer-trade/`, `seer-protocol/`, `evm-onchain/`, `wallet-setup/` | Supporting skills: the reasoned arm for other Seer markets, how Seer works onchain, Optimism addresses and gas, the encrypted-wallet tool |
+| `.claude/skills/seer-trade/`, `seer-protocol/`, `evm-onchain/`, `wallet-setup/` | Supporting skills: the reasoned arm for other Seer markets, how Seer works onchain, Optimism addresses and gas, the encrypted-wallet tool (not for this bot's wallet: SETUP.md step 2) |
 | `r3.cjs` | The one command, on any OS: `node r3.cjs install`, `trade`, `clearance`, `selftest`, `status`, and `planner <subcommand>` for supervised runs |
 | `routine.config.example.json` | The template of `routine.config.json`: your wallet, your own address, the signer's allowlist |
 | `tools/` | Read-only helpers: book status, an independent second-RPC check, who swapped in our pools |
@@ -153,8 +153,9 @@ your money or a website login. In short:
    funded on Optimism, your CSV. Steps 1 to 5 are the same for all three.
 1. A **private copy** of this repository, the *trading* repository, with access for the place you chose: the Claude
    GitHub app for Claude, ChatGPT's GitHub connection (with write) for ChatGPT in the cloud, nothing on your own computer.
-2. Deny rules for the key folders, then the **bot wallet** as an encrypted keystore with a text password
-   (`cast wallet new ~/.foundry/keystores r3-bot` or `cast wallet import r3-bot --interactive`), funded on Optimism.
+2. Deny rules for the key folders, then the **bot wallet**, an encrypted keystore with a text password, made in
+   your own terminal: a new account from your wallet app, imported with `cast wallet import r3-bot --interactive`
+   (recommended), or a new wallet from SETUP.md's `cast wallet new` commands; funded on Optimism.
 3. `routine.config.json`, `node r3.cjs install` (a first install stops and names the signer's `allowlist-init`), the
    allowlist copied to `setup/` with its sha256, `install` again, and the key files on your computer.
 4. Your CSV, the first question and the signer self-test. Nothing is traded during setup: the first trade is the

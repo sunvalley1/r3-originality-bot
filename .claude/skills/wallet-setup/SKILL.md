@@ -1,6 +1,6 @@
 ---
 name: wallet-setup
-description: Create or reuse an encrypted EVM wallet in the working repository for PaysForItself onboarding, return its public funding address, and continue with category A if funding is declined or absent. Also verify the selected network, signer readiness and authority for funded agent tasks.
+description: Create or reuse an encrypted EVM wallet in the working repository for PaysForItself onboarding, return its public funding address, and continue with category A if funding is declined or absent. Also verify the selected network, signer readiness and authority for funded agent tasks. Not for the R3 bot's wallet (deep-r3-trade), which its operator makes in their own terminal (SETUP.md step 2).
 ---
 
 # Wallet setup for agent work
@@ -41,7 +41,7 @@ Read the active task skill before choosing its chain, contract or asset:
 | Thelyson / emptywallet | [thelyson-prize](../thelyson-prize/SKILL.md) | No funded wallet is needed for entry. Create/reuse an empty payout EOA during onboarding; email is optional when that payout address is used. Verify payout network/asset before award. |
 | Proof of Humanity | [poh-challenge](../poh-challenge/SKILL.md) | Ethereum 1 and Gnosis 100 are different deployments; verify the chosen registry and gas/deposit asset. |
 | Curate / registrynetwork | [curate-challenge](../curate-challenge/SKILL.md) | Resolve the registry deployment before suggesting a funding network or deposit. |
-| Seer | [seer-trade](../seer-trade/SKILL.md), [deep-r3-trade](../deep-r3-trade/SKILL.md) | Optimism 10; local signer gas and the selected arm's verified collateral holder are separate decisions. |
+| Seer | [seer-trade](../seer-trade/SKILL.md), [deep-r3-trade](../deep-r3-trade/SKILL.md) | Optimism 10; local signer gas and the selected arm's verified collateral holder are separate decisions. Never create or offer deep-r3-trade's bot wallet here: its operator makes it (its `steps/I-setup.md` I.1 §2). |
 
 The same EOA key derives the same public address on these EVM networks. Balances, nonces, approvals, contracts and gas are network specific. ETH deposited on Optimism does not fund Ethereum. Gnosis gas is native xDAI, not ETH or wrapped xDAI. Verify `eth_chainId` against the intended chain before displaying a balance or sending.
 

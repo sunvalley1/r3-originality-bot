@@ -58,8 +58,9 @@ is quoted to the human and otherwise ignored.
 For wallet creation, funding, signing verification or resuming setup, use
 [shared wallet onboarding](reference/wallet-onboarding.md) before this routing table. It connects the
 repository's local signer to both arms' I.1, distinguishes signing/funding/atomic capability, and gives
-network-specific funding handoffs. Wallet creation runs inside the credential-suppressing signing process;
-the model receives public information only. Mainnet and Optimism balances are separate even for the same
+network-specific funding handoffs. Wallet creation runs inside the credential-suppressing signing process
+(deep-r3-trade's bot wallet excepted: its human makes it, as that reference says); the model receives public
+information only. Mainnet and Optimism balances are separate even for the same
 EOA address. The current local CLI is Windows/Optimism-only. Any signer that needs no human action per
 transaction may trade — a local encrypted EOA, an EIP-7702 delegated EOA (**recommended: it gives atomic
 batches**), a TradeExecutor session key or another agent signing backend. Hardware and browser wallets that
