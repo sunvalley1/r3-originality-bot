@@ -158,11 +158,31 @@ The signer signs with an **encrypted keystore** (a small JSON file) and its **pa
 a terminal window of your own (not the `!` prefix, not your agent app's terminal panel), never through the agent. Use
 the same window for the key-file commands of step 3 and the clipboard command of step 6.
 
-**The password:** at least 20 characters of **letters and digits only**. No quotes, spaces, `#`, `$` or `\`: it goes
-on one line of the cloud's settings in single quotes (step 6), and those characters break that line. Keep it in your
-password manager.
+**The password:** a new one, used for nothing else: at least 20 characters of **letters and digits only**. No quotes,
+spaces, `#`, `$` or `\`: it goes on one line of the cloud's settings in single quotes (step 6), and those characters
+break that line. Keep it in your password manager.
 
-**You, option A — a new wallet (recommended).** Make the folder first (a fresh Foundry install has none, and
+**You, option A — a new account you create yourself (recommended).** In your wallet app on this computer (MetaMask,
+for example), add a new account only for the bot, one that will hold nothing else on any chain. Never import your main
+wallet's key: the bot trades every USDC, USDS and sUSDS this address holds on Optimism, and step 6 puts its keystore
+and password where every command in the cloud environment can read them. Once the routine is on, send nothing from
+this account in MetaMask or any other wallet app (one sender per wallet, step 8). On Windows, first turn off clipboard
+sync across your devices if it is on (Settings → System → Clipboard). Then:
+
+```bash
+cast wallet import r3-bot --interactive
+```
+
+When it asks for the private key, and not before, copy the new account's private key from your wallet app (never the
+recovery phrase, and with no screen shared) and paste it: nothing shows, and it stays out of your shell history. Then
+it asks for the password: the new one above, not your wallet app's own password. It writes the keystore file `r3-bot`
+and prints an address, which must be the new account's: if not, delete the `r3-bot` file and import the right key.
+Then clear the clipboard as step 6 says, Win+V history included. If the key ever lands anywhere but that prompt, do not
+use or fund that account: add another.
+
+**You, option B — a new wallet from your agent's command.** If you ask your agent to create the wallet, it should give
+you these commands for your own window. If it offers to make the wallet itself, or to run a wallet tool for you, say
+no: such a wallet cannot go to the cloud (below). Make the folder first (a fresh Foundry install has none, and
 `cast wallet new` will not create it), then the wallet. macOS or Linux:
 
 ```bash
@@ -177,23 +197,13 @@ New-Item -ItemType Directory -Force "$env:USERPROFILE\.foundry\keystores" | Out-
 cast wallet new "$env:USERPROFILE\.foundry\keystores" r3-bot
 ```
 
-Always give both the folder and the name: without the folder, `cast wallet new` writes no keystore and prints the raw
-private key on screen. If that happens, never use or fund that wallet; run the commands above instead. It asks for
+Always give both the folder and the name: with nothing after it, `cast wallet new` writes no keystore and prints the
+raw private key on screen. If that happens, never use or fund that wallet; run the commands above instead. It asks for
 the password once (`Enter secret:`), writes the keystore file `r3-bot` and prints the new address.
 
-**You, option B — a key you already have**, only for an account made for this bot that holds nothing else on any
-chain. Never import your main wallet's key (in MetaMask, add a new account for the bot and export that account's key):
-the bot trades every USDC, USDS and sUSDS this address holds on Optimism, and step 6 puts its keystore and password
-where every command in the cloud environment can read them. Once the routine is on, send nothing from this account in
-MetaMask or any other wallet app (one sender per wallet, step 8).
-
-```bash
-cast wallet import r3-bot --interactive
-```
-
-It asks for the private key (hidden, never in your shell history), then the password, and writes the same file. A
-wallet made by this repository's Windows wallet tool (the `wallet-setup` skill) has a sealed, binary password that
-cannot go to the cloud: import its key this way, under a text password.
+Do not use a wallet an agent made in its own process. One from this repository's Windows wallet tool (the
+`wallet-setup` skill), for example, has a sealed, random password that cannot go to the cloud, and this repository
+gives no way to take its key out.
 
 **Back it up:** copy the keystore file (`~/.foundry/keystores/r3-bot`, or `%USERPROFILE%\.foundry\keystores\r3-bot`)
 somewhere safe, and keep the password with it. Lose either and the funds are lost.
