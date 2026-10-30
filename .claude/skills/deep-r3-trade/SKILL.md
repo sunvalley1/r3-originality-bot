@@ -261,13 +261,14 @@ drive the signer can trade.
    csv-store-mismatch | aborted`) plus a short human-readable `./run/<run-id>/report.md` — what was sent (tx
    hashes), what was skipped and why, balances before and after, and P&L so far from H.
 
-**Setup asks the operator, in plain words.** In the setup session, once the CSV is stored, the skill explains what
+**Setup asks the operator once, in plain words, at its start** (SETUP.md step 0): the skill explains what
 autonomous mode does (every `CADENCE` the agent buys, sells, mints, merges and redeems on the 98 Round 3 markets
 with the whole balance of the trading wallet, without asking per batch), what protects the funds (the signer
 allowlist, which bounds what the signer signs — scope only, no amount or frequency limits; in the trading routine,
 the key protections listed above, none of which makes reading the key impossible; and a dedicated trading wallet,
 which alone bounds what a leaked key can take) and how to stop it (disable the schedule, and revoke the delegation if
-used). It then asks for two explicit permissions:
+used). It then asks, in one list with everything else setup will do for the operator (`steps/I-setup.md` I.2 §1),
+for two explicit permissions:
 
 1. **"Allow autonomous daily trading?"** A yes is recorded as `autonomy.enabled = true` with `authorized_at` in
    `./run/setup.deep-r3-trade.json`. A no keeps supervised mode only, and the skill never asks again unasked.
@@ -281,13 +282,14 @@ used). It then asks for two explicit permissions:
    connectors; and `r3.cjs trade` runs the planner, which starts the signer's
    `check`, `simulate` and `send`, and only to clear a stuck nonce its `clear-nonce` and `reconcile` (G §8 *Nonce
    pinning*), as its own child processes, which no Claude Code rule sees.
-   A yes, given once that routine exists with exactly those tools and its pinned prompt and its setup run (the
-   self-test and the planner's clearance) has passed (a Codex task in its place: I.2 §1 item 2's own
-   conditions), is recorded as `schedule.signer_allow_rule_added_at`. Without
+   A yes, given at the start, is recorded as `schedule.signer_allow_rule_added_at` only once that routine exists with
+   exactly those tools and its pinned prompt and its setup run (the self-test and the planner's clearance) has passed
+   (a Codex task in its place: I.2 §1 item 2's own conditions). Without
    it (the field null) the scheduled run sends nothing: the planner checks that field at the start of each send step.
-   Q1 is asked first, then the signer self-test runs, then Q2; if the self-test fails, Q2 is not asked and the skill
-   says why. The yes is recorded only after `autonomy.signer_selftest_passed_at` is set for that exact signer path,
-   with the signer's path and hash recorded in local bookkeeping; never for `tools/wallet.cjs` or any signer without
+   Q1's yes is recorded first, then the signer self-test runs, then Q2's; if the self-test fails, Q2's yes is not
+   recorded and the skill says why. The yes is recorded only after `autonomy.signer_selftest_passed_at` is set for
+   that exact signer path, with the signer's path and hash recorded in local bookkeeping; never for
+   `tools/wallet.cjs` or any signer without
    the allowlist. If the self-test fails or was never run, or the trading routine's signer path or hash changes, the
    trading routine is paused and the field set to null.
 

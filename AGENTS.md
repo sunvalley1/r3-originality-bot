@@ -41,7 +41,9 @@ read-only checks, and tell them in one short list what is done and what is next:
 
 If anything is left, offer to walk them through [SETUP.md](SETUP.md) from that step, one step at a time: say what the
 step is for, what they will do and what you will do, wait for them to finish it, check it with the step's own check,
-and only then go on. If they decline, do what they asked.
+and only then go on. If they decline, do what they asked. Before the first step you walk them through, ask once for
+everything setup will do for them (SETUP.md step 0, *The one ask*), and record each yes only when its step's check
+passes; a new session, or a change of where the bot runs, asks again for what is not yet recorded.
 
 ## Rules for every agent here
 

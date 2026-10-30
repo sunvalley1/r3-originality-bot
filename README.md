@@ -150,7 +150,8 @@ your money or a website login. In short:
 0. What you need, and **your choice of where it runs**: **Claude** (a routine in the cloud: a Claude plan with routines
    and Claude Code), **ChatGPT in the cloud** (a Codex cloud environment and a schedule your plan offers for it) or
    **ChatGPT on your own computer** (a Codex scheduled task); then Git, Node.js 22, Foundry's `cast`, a new wallet
-   funded on Optimism, your CSV. Steps 1 to 5 are the same for all three.
+   funded on Optimism, your CSV. Your agent then asks once for your OK to everything it will do for you. Steps 1
+   to 5 are the same for all three.
 1. A **private copy** of this repository, the *trading* repository, with access for the place you chose: the Claude
    GitHub app for Claude, ChatGPT's GitHub connection (with write) for ChatGPT in the cloud, nothing on your own computer.
 2. Deny rules for the key folders, then the **bot wallet**, an encrypted keystore with a text password, made in
@@ -158,22 +159,22 @@ your money or a website login. In short:
    (recommended), or a new wallet from SETUP.md's `cast wallet new` commands; funded on Optimism.
 3. `routine.config.json`, `node r3.cjs install` (a first install stops and names the signer's `allowlist-init`), the
    allowlist copied to `setup/` with its sha256, `install` again, and the key files on your computer.
-4. Your CSV, the first question and the signer self-test. Nothing is traded during setup: the first trade is the
-   first run where you chose (a trade now, below).
+4. Your CSV and the signer self-test. Nothing is traded during setup: the first trade is the first run where you
+   chose (a trade now, below).
 5. Push your private copy (`run/` included, never the lock).
 6. The **cloud environment** `r3-trade` on claude.ai: a network allowlist and four variables, the key as the
    keystore's text in single quotes, `R3_KEYSTORE_JSON='{...}'`, never the raw private key.
 7. The **trading routine**, pinned to your commit's tree fingerprint and created with Claude Code's `/schedule` so its
    tool lists are set, then its **setup run**: a Run now of it with a setup prompt and two extra tools.
-8. Record the setup run in the setup record, give the routine back its trading prompt and tools, answer the second
-   question. Then you turn the routine on when you choose (its **Run now** trades at once).
+8. Give the routine back its trading prompt and tools, then record the setup run and your OK to sending without
+   asking in the setup record. Then you turn the routine on when you choose (its **Run now** trades at once).
 
    With ChatGPT in the cloud instead of steps 6 to 8: a Codex cloud environment holding the key, a setup run that must
-   push its records (a cloud that cannot push cannot run the bot), the second question, and a schedule you switch on
+   push its records (a cloud that cannot push cannot run the bot), your OK recorded, and a schedule you switch on
    (SETUP.md, "6 to 8 with ChatGPT in the cloud"; untested with this bot until that setup run passes).
 
    With ChatGPT on your own computer instead: a Codex scheduled task (the computer must be on, with the ChatGPT app
-   open, at run times), its permissions, a no-send clearance on that computer, the second question, and the task you
+   open, at run times), its permissions, a no-send clearance on that computer, your OK recorded, and the task you
    switch on (SETUP.md, "6 to 8 with Codex instead").
 9. Check a run; trade now whenever you like.
 
@@ -190,8 +191,9 @@ the self-test, I.2 §7 for the repository, the routine and the setup run.
   pinned. Review the new commit, including any `.claude/`, `CLAUDE.md` or `.mcp.json` file it adds or changes (the pin
   cannot stop those at session start), and push it. Make a setup run with the new commit's tree fingerprint in its prompt (SETUP.md step 7). If
   `planner.cjs` or `signer.cjs` changed, record the new paths and hashes its `install` printed in the setup record; a
-  changed signer also needs the self-test's pass and the second question again (`steps/I-setup.md` I.2 §1). Commit
-  `run/`, then put the new commit's tree fingerprint in the trading routine's prompt and in its pin-check tool entry
+  changed signer also needs the self-test's pass and your OK to sending without asking again (`steps/I-setup.md`
+  I.2 §1). Commit `run/`, then put the new commit's tree fingerprint in the trading routine's prompt and in its
+  pin-check tool entry
   (with `/schedule update` in Claude Code: the claude.ai form changes the prompt, not the tool lists). Until you do,
   the trading run stops at its pin check. With ChatGPT in the cloud: a new CC2 setup run and the new tree in the
   schedule's prompt (SETUP.md step 9). With a Codex scheduled task on your computer, there is no setup run: SETUP.md,
