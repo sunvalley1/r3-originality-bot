@@ -706,8 +706,8 @@ power settings), and keep any Claude routine on this wallet off.
 - **Pause:** the task's toggle in the app's Scheduled list. To revoke your yes to sending without asking, the agent
   changes the setup record in this folder: the task never pulls, so a change pushed from anywhere else does not reach
   it.
-- **A supervised send here:** pause the task first, and check that no run is live (`node r3.cjs status`; the app
-  shows no running task). When that chat's sends are done, delete its `run/<run-id>/session-owner.json`, then resume
+- **A supervised send here:** pause the task first, and check that no run is live (the app
+  shows no running task; `node r3.cjs status` cannot see a run that is waiting between its fresh wakes). When that chat's sends are done, delete its `run/<run-id>/session-owner.json`, then resume
   the task.
 - **Once the first trade has sent:** pause the task and have the agent run the signer's nonce test in a supervised
   chat here (`steps/I-setup.md` I.1 §7, *Setup nonce test*); it records `nonce_pinning: true` on a pass. Until then,

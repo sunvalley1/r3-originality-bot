@@ -340,8 +340,11 @@ async function sendTx(R, g, gi, T, i, cg) {
   const ps = await X.presend(R.env, R.book, T, n);
   if (R.check) return { pf, ps };
   const res = await X.broadcast(R.env, R.book, T, n, ps.hash, { source: 'entry', group: g.id });
-  const post = await readBalances(R, g);
+  // the landed hash goes into exec-state.json before anything else is read: the start-of-run repair (repairPlanRows) and
+  // the recovery rule (recoverGroup) count a group's landed transactions from exec-state.json alone, so a transport
+  // failure of the read below must not lose it (it would count the group short and send calldata that already landed)
   const gs = R.STATE.groups[g.id]; gs.txs = gs.txs || []; gs.txs.push({ idx: T.idx, nonce: n, hash: res.hash, block: res.receipt.block_number }); saveState(R);
+  const post = await readBalances(R, g);
   if (pf.notes.length) R.ctx.log(`  notes: ${pf.notes.join('; ')}`);
   return { pf, ps, post, hash: res.hash, receipt: res.receipt };
 }
@@ -478,11 +481,12 @@ async function startup(R) {
 async function nextGroup(R) {
   let gi = 0; while (gi < R.GROUPS.length && R.STATE.groups[R.GROUPS[gi].id] && R.STATE.groups[R.GROUPS[gi].id].status === 'done') gi++;
   for (let k = gi; k < R.GROUPS.length; k++) { const st = R.STATE.groups[R.GROUPS[k].id]; if (st && ['in-progress', 'stopped', 'skipped'].includes(st.status)) throw stop('resume-refused', `group ${R.GROUPS[k].id} is ${st.status}: never resumed on the original plan (G section 8 step 4)`); }
-  const nn = await R.env.H(['nonce', R.holder]);
+  // the first unsent group's first nonce is a floor: a read below it is a lagging RPC, read again (exec-core readNonce)
+  const want = gi < R.GROUPS.length ? R.GROUPS[gi].txs[0].nonce_expected : null;
+  const nn = await X.readNonce(R.env, want, 'exec');
   if (gi >= R.GROUPS.length) return { gi, nn, done: true };
-  const want = R.GROUPS[gi].txs[0].nonce_expected;
-  if (nn.latest !== nn.pending) throw stop('pending-transaction', `a transaction of the holder is pending (latest ${nn.latest}, pending ${nn.pending}); settle it first`, { nonce: nn });
-  if (nn.latest !== want) throw stop('nonce-moved', `the holder nonce ${nn.latest} is not the first unsent group's first nonce ${want} (${R.GROUPS[gi].id}): a send the plan did not expect`, { nonce: nn });
+  if (nn.latest !== nn.pending) throw stop('pending-transaction', `a transaction of the holder is pending (latest ${nn.latest}, pending ${nn.pending}); settle it first`, { nonce: nn, foreign: true });
+  if (nn.latest !== want) throw stop('nonce-moved', `the holder nonce ${nn.latest} is not the first unsent group's first nonce ${want} (${R.GROUPS[gi].id}): a send the plan did not expect`, { nonce: nn, foreign: true });
   if (rowsOfGroup(R, R.GROUPS[gi]).some((r) => alreadyRowed(R, r))) throw stop('resume-refused', `fills.json already holds a row for ${R.GROUPS[gi].id}`);
   for (let k = 0; k < gi; k++) for (const t of R.STATE.groups[R.GROUPS[k].id].txs || []) { const r = await R.env.H(['receipt', t.hash]); if (!(r.found && r.success)) throw stop('resume-refused', `recorded transaction ${t.hash} of ${R.GROUPS[k].id} has no successful receipt`); }
   if (R.book.exists('inflight.json')) throw stop('inflight-unsettled', `${R.book.rel('inflight.json')} is present: settle it before anything is sent`);
@@ -605,7 +609,9 @@ async function stopRun(R, e, cg) {
   if (R.env.open) {
     try {
       const st = await X.settleNonce(R.env, R.book, R.env.open.n);
-      f.settlement = { outcome: st.outcome, via: st.via, hash: st.hash || null };
+      // foreign: a transaction mined at n that is none of the run's attempts, another sender's unless it is the run's own
+      // cancel (own_cancel; exec-core anotherSender, the fresh-wake verdict)
+      f.settlement = { outcome: st.outcome, via: st.via, hash: st.hash || null, foreign: st.foreign || null, own_cancel: !!st.own_cancel };
       // a not-sent finding on a signer that cannot pin the nonce, with no foreign transaction at n, is no settlement:
       // inflight.json stays and the wake stays aborted (G section 8, Nonce pinning)
       const keepOpen = st.outcome === 'not-sent' && !R.env.pin && !st.foreign;
@@ -627,7 +633,9 @@ async function stopRun(R, e, cg) {
     } catch (x) { f.keep_aborted = true; f.settlement = { outcome: 'unreadable', via: clip(x.message, 200) }; f.pending_nonce = R.env.open.n; f.pending_hash = R.env.open.tx_hash; }
     R.env.open = null;
   }
-  if (e && e.landed && cg && cg.gi !== undefined) { const gs = R.STATE.groups[R.GROUPS[cg.gi].id]; if (gs) { gs.txs = gs.txs || []; if (!gs.txs.some((t) => t.hash === e.landed.hash)) gs.txs.push({ hash: e.landed.hash, block: e.landed.receipt.block_number, recorded_at: 'landed before the stop; its row was not written' }); } }
+  // a transaction that landed before the stop (exec-core confirm: e.landed, a nonce read after its receipt that stopped),
+  // with its index and nonce, so the repair and the recovery rule place it in the group
+  if (e && e.landed && cg && cg.gi !== undefined) { const gs = R.STATE.groups[R.GROUPS[cg.gi].id]; const lr = e.landed.record || {}; if (gs) { gs.txs = gs.txs || []; if (!gs.txs.some((t) => t.hash === e.landed.hash)) gs.txs.push({ ...(Number.isInteger(lr.idx) ? { idx: lr.idx } : {}), ...(Number.isInteger(lr.nonce) ? { nonce: lr.nonce } : {}), hash: e.landed.hash, block: e.landed.receipt.block_number, recorded_at: 'landed before the stop; its row was not written' }); } }
   const rec = { kind: s.cause, notes: s.notes, at: lib.nowIso(), exit: s.exit, group: cg && cg.gi !== undefined ? R.GROUPS[cg.gi].id : null, fields: f };
   R.STATE.stop = rec; saveState(R);
   const reason = clip(`${s.cause}: ${s.notes}`, 600);
@@ -671,6 +679,7 @@ function summary(R, extra) {
     first_tx: sends[0] ? sends[0].tx_hash : null, last_tx: sends.length ? sends[sends.length - 1].tx_hash : null,
     gas_cost_eth_receipts: weiStr(cost),
     nonce_pinning: R.env.pin, signer_env_dropped: R.env.envDropped, signer_log_path: R.env.logPath,
+    nonce_rereads: R.env.lagRereads || 0, // nonce reads repeated after a lagging RPC answer (G section 8, The nonce floor)
     tx_hash_file: R.book.rel('exec-sends.json'),
     ...extra,
   };
@@ -887,8 +896,8 @@ async function run(ctx) {
 // prints no logs) and H never fills a row from allocation.json or a live balance, so the row comes from the signed
 // calldata: exact where the calldata fixes the amount (a split, an exact-output count, a set-sell's or a merge's q, a
 // complex buy's x), else the calldata's own bound (amountOutMinimum, a floor on what came in; amountInMaximum, a ceiling
-// on what went out), said in `error`. It also counts each group's landed transactions against the plan: some but not
-// all landed is a half-done group.
+// on what went out), said in `error`. It also counts each group's landed transactions against the plan (exec-state.json,
+// plus an entry send exec-sends.json records that it does not hold): some but not all landed is a half-done group.
 // ---------------------------------------------------------------------------------------------------------------
 function signedData(ctx, rid, T) {
   if (!T.rebuild_at_send) return T.data;
@@ -921,6 +930,18 @@ function repairPlanRows(ctx, rid, late, note) {
   const st = book.readJson('exec-state.json', null) || { run_id: rid, plan_built_at: plan.built_at, groups: {}, stop: null, invocations: [], balances_before: null, presend_sim: [] };
   st.groups = st.groups || {};
   const E = ctx.ethers(); const IF = new E.Interface(IF_SIGS);
+  // an entry send exec-sends.json records (its receipt is in) that exec-state.json does not hold, the run killed between
+  // the two writes (G section 8, Rows as they land): placed in its group as exec would have, so the group is not counted
+  // short and nothing of it is sent again; never over another transaction already placed at that index
+  let placed = false;
+  for (const s of book.sends()) {
+    if (s.source !== 'entry' || !s.tx_hash || !s.group) continue;
+    const g = groups.find((x) => x.id === s.group); const T = g ? g.txs.find((x) => (Number.isInteger(s.idx) ? x.idx === s.idx : x.nonce_expected === s.nonce)) : null; if (!T) continue;
+    const gs = st.groups[g.id] || (st.groups[g.id] = { status: 'skipped', txs: [] }); gs.txs = gs.txs || [];
+    if (gs.txs.some((t) => lc(t.hash || '') === lc(s.tx_hash) || t.idx === T.idx || (Number.isInteger(t.nonce) && t.nonce === s.nonce))) continue;
+    gs.txs.push({ idx: T.idx, nonce: s.nonce, hash: s.tx_hash, block: s.block, recorded_at: `${note}; placed from exec-sends.json` }); placed = true;
+  }
+  if (placed) book.writeJson('exec-state.json', st);
   if (late && late.input_hash) {
     // the plan's transaction at that nonce whose signed input hashes to the attempt's calldata_hash (a Half B send recorded
     // in this folder can reuse the nonce of a group the run skipped: never matched by the nonce alone)
@@ -1025,8 +1046,8 @@ async function recEncode(env, book, sig, args, tag) {
 // the batch simulated now as one group: every call 0x1, nothing clamped, no override, at the holder's pending nonce; it
 // gives each transaction its nonce and its gas fields ("the plan" of a recovery batch, G section 8)
 async function recSimulate(env, book, txs, name) {
-  const nn = await env.H(['nonce', env.holder]);
-  if (nn.latest !== nn.pending) throw X.xstop(env.step, 'pending-transaction', `a transaction of the holder is pending (latest ${nn.latest}, pending ${nn.pending}): no recovery batch is simulated or sent`, { nonce: nn });
+  const nn = await X.readNonce(env, null, 'recovery'); // the process floor: a read below what this run proved is read again
+  if (nn.latest !== nn.pending) throw X.xstop(env.step, 'pending-transaction', `a transaction of the holder is pending (latest ${nn.latest}, pending ${nn.pending}): no recovery batch is simulated or sent`, { nonce: nn, foreign: true });
   book.write(name, JSON.stringify([{ calls: txs.map((t) => ({ to: t.to, data: t.data, value: '0' })) }]));
   const page = await env.H(['simulate', book.rel(name)]);
   const pb = G.pageProblems(page, { entries: 1, count: txs.length, pendingNonce: nn.pending });
@@ -1177,7 +1198,7 @@ async function recoverGroup({ env, book, gid, trigger, by, failed = null }) {
           for (const t of batch) { const c = await X.signerRun(env, 'check', t.signer_input_file); if (!(c.exit === 0 && c.last && c.last.allowed === true)) { refused = `the signer's check refused ${t.label}: ${clip(c.stdout || c.stderr, 200)}`; break; } }
           const fit = refused ? null : X.groupFits(env, batch.length, env.deadlineMs);
           const af = refused || !fit.ok ? null : await X.affordability(env, batch);
-          if (refused) end('stopped', `${refused} (a refusal before any broadcast: nothing more is tried in this run)`);
+          if (refused) { end('stopped', `${refused} (a refusal before any broadcast: nothing more is tried in this run)`); att.stop = { cause: 'allowlist-refused', exit: EXIT.STOP }; }
           else if (!fit.ok) end('stopped', `turn/time budget exhausted: the recovery batch (${batch.length} transactions) does not fit the time left (G section 8, Room to finish)`);
           else if (!af.ok) end('stopped', `affordability: ${af.text}; the recovery batch is not started (G section 8, Affordability)`);
           else {
@@ -1261,6 +1282,8 @@ async function recoverGroup({ env, book, gid, trigger, by, failed = null }) {
       const rows = recCalldataRows(IF, plan, g, tr, data, tr.tx_hash, errText('amounts from the signed calldata (the batch stopped after this send landed)'));
       if (rows.length && !book.fills().runs.some((x) => lc(x.tx_hash || '') === lc(tr.tx_hash))) { book.addRows(rows); att.rows += rows.length; }
     };
+    let openForeign = false; // the open attempt's nonce taken by a transaction of none of the run's attempts, not its own cancel
+    let openOutcome = null; // the open attempt's settlement outcome (the fresh-wake verdict reads a chain-mismatch)
     if (env.open) {
       try {
         const st = await X.settleNonce(env, book, env.open.n);
@@ -1268,6 +1291,7 @@ async function recoverGroup({ env, book, gid, trigger, by, failed = null }) {
         if (st.outcome === 'landed' || (st.outcome === 'not-sent' && !keepOpen)) book.settleInflight();
         if (st.outcome === 'pending' || keepOpen) { att.keep_aborted = true; att.pending_nonce = env.open.n; }
         if (st.outcome === 'landed' && st.receipt && st.receipt.success) landedNow(st.hash);
+        openForeign = st.outcome === 'not-sent' && !!st.foreign && !st.own_cancel; openOutcome = st.outcome;
       } catch (x) { att.keep_aborted = true; att.pending_nonce = env.open.n; }
       env.open = null;
     }
@@ -1275,9 +1299,13 @@ async function recoverGroup({ env, book, gid, trigger, by, failed = null }) {
     const lastTr = att.txs[att.txs.length - 1]; if (lastTr && lastTr.tx_hash && !lastTr.row) landedNow(lastTr.tx_hash);
     if (s.fields && s.fields.keep_aborted) att.keep_aborted = true;
     end('stopped', `the recovery batch stopped (${s.cause}): ${clip(s.notes, 400)}`); att.stop = { cause: s.cause, exit: s.exit };
+    // what the fresh-wake verdict reads (wake.cjs): another sender met, a signer refusal that was only an RPC failure
+    if (openForeign || X.anotherSender(s.cause, s.fields)) att.stop.another_sender = true;
+    if (s.fields && s.fields.transient === true) att.stop.transient = true;
+    if (openOutcome) att.stop.settlement = openOutcome;
   }
   record();
-  return { group: gid, outcome: att.outcome, decision: att.decision, why: att.why, txs: att.txs.filter((t) => t.tx_hash).map((t) => t.tx_hash), rows: att.rows, keep_aborted: !!att.keep_aborted, pending_nonce: att.pending_nonce === undefined ? null : att.pending_nonce };
+  return { group: gid, outcome: att.outcome, decision: att.decision, why: att.why, txs: att.txs.filter((t) => t.tx_hash).map((t) => t.tx_hash), rows: att.rows, keep_aborted: !!att.keep_aborted, pending_nonce: att.pending_nonce === undefined ? null : att.pending_nonce, stop_cause: att.stop ? att.stop.cause : null, stop_transient: !!(att.stop && att.stop.transient), another_sender: !!(att.stop && att.stop.another_sender), settlement: (att.stop && att.stop.settlement) || null };
 }
 
 // The effect of one landed recovery send, kept in recovery.json so that no later recovery repeats it: the plan

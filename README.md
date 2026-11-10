@@ -107,7 +107,10 @@ A scheduled run is the **trading routine**. Its agent first checks that the code
 2. runs the planner's `wake`, which repairs anything an earlier run left unfinished; selects the markets (C); takes the
    forecast (D) and sets it beside the prices unchanged (E); converts any USDC to sUSDS (PSM3); sizes the positions (F),
    builds the plan (G) and sends it (exec); merges and redeems settled positions (Half B), then scores them (H);
-3. writes `run/<run-id>/report.md`, and commits and pushes the run's records (`run/` only) to the trading repository.
+3. writes `run/<run-id>/report.md`, and commits and pushes the run's records (`run/` only) to the trading repository;
+4. when that wake ended on a stop the planner marks recoverable and the setup record's `schedule.fresh_wakes_max`
+   allows it (0 or missing: off), waits and runs a fresh wake on a new run-id inside the same call, at most that many
+   times and never past the first wake's deadline: the agent never runs `trade` twice.
 
 **Your private copy.** You keep one private copy of this repo, the **trading repository**: the code,
 `routine.config.json`, `setup/r3-allowlist.json` and the run records in `run/`. Only you and the trading routine (with
@@ -204,7 +207,7 @@ the self-test, I.2 §7 for the repository, the routine and the setup run.
   were removed from the base skill; `install`, `trade` and `clearance` refuse a config that still holds those keys and
   name the one to delete.
 - **Pause:** turn the routine off in claude.ai, or set `autonomy.enabled` to false in `run/setup.deep-r3-trade.json`
-  and push it. Neither stops a run already in progress. Removing the two key variables from the trading environment
+  and push it. Neither stops a run already in progress, though a pushed change to that file ends it before any further fresh wake. Removing the two key variables from the trading environment
   stops new runs from getting the key. It does not reach a past run: its VM pauses with its files saved, the key files
   `install` wrote among them, and continuing its session restores it. Never continue a trading run's session. With a
   Codex scheduled task: pause it in the app, and set the field in the clone on that computer; a push does not reach

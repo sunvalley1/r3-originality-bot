@@ -49,21 +49,29 @@ keeps the key and the wallet safe.
    and takes the lock; takes the repository lock (it pulls the trading repository, then pushes
    `run/.repo-lock.deep-r3-trade.json`, so no other run of this routine trades the wallet at the same time, and
    chooses the run-id again after the pull); checks that the setup record pins exactly the planner and signer `install` just laid down
-   (their paths and sha256) and that the planner's config names that signer and helper; runs the planner's `wake`
-   exactly once (the repair of earlier runs, Half A: C, D on the stored CSV, E, F, G and the sends; Half B: merges and
-   redeems; H: the scores); writes the final status; and commits and pushes the run records (`run/` only).
-3. If step 2's JSON line has a `run_id`, read `run/<run-id>/report.md` and `run/<run-id>/wake-status.json`. If it has
-   none, skip this step and report its exit code and its `status` or `error`: `lock-held` (exit 2) means another run
-   held a lock: name its `holder` (run-id, start, expiry) when the line gives one, and say this run did nothing;
-   `lock-committed` (exit 2) means `run/.lock.deep-r3-trade` is committed in the trading repository (its `notes` give
-   the fix);
-   `lock-unavailable` (exit 2) means the repository lock could not be taken: a git fetch, pull or push failed, tracked
-   files in this clone differ from HEAD, the clone is on a detached HEAD while `routine.config.json`'s `git.branch` is
-   empty, or `schedule.time_limit_hours` in the pulled setup record is missing or not a positive number; report its
-   `notes`, which say which;
-   `code-moved` (exit 4) means the trading repository has a commit outside `run/` that your pin check did not see, so
-   the routine needs the new tree pinned; anything else means the run never started (no setup record, a config
-   error, an internal error).
+   (their paths and sha256) and that the planner's config names that signer and helper; runs the planner's `wake` (the
+   repair of earlier runs, Half A: C, D on the stored CSV, E, F, G and the sends; Half B: merges and redeems; H: the
+   scores) and writes its final status. When that wake ended on a stop the planner marks recoverable
+   (`wake-status.json` `retry.verdict` `fresh-wake`) and the setup record allows it (`schedule.fresh_wakes_max`), it
+   waits (after another sender used the wallet, also until the wallet's nonce has stayed quiet), checks origin and the
+   pins again, and runs a fresh wake on a new run-id inside this one command, at most `fresh_wakes_max` times and never
+   past the first wake's deadline; each fresh wake's start-of-run repair settles and repairs what the one before left
+   (`../steps/I-setup.md` I.2 §6, *A fresh wake in the same run*). Both locks stay held across the wakes; the records
+   (`run/` only) are pushed after each wake, and the repository lock is removed in the last push.
+3. If step 2's JSON line has a `run_id`, read `run/<run-id>/report.md` and `run/<run-id>/wake-status.json` for every
+   run-id in its `attempts`, one per wake, in order; the line's own `run_id` is the last one (a refusal at the gates before the first wake has no `attempts`: its
+   `run_id` is then the only one, and its `notes` say why). An internal error's line
+   (exit 1) has no `run_id` but carries `attempts` when a wake had started: read those the same way, and report the
+   `error`. If the line has neither, skip this step and report its exit code and its `status` or `error`: `lock-held`
+   (exit 2) means another run held a lock: name its `holder` (run-id, start, expiry) when the line gives one, and say
+   this run did nothing; `lock-committed` (exit 2) means `run/.lock.deep-r3-trade` is committed in the trading
+   repository (its `notes` give the fix); `lock-unavailable` (exit 2) means the repository lock could not be taken: a
+   git fetch, pull or push failed after its retries or was refused access, tracked files in this clone differ from
+   HEAD, the clone is on a detached HEAD while `routine.config.json`'s `git.branch` is empty, or
+   `schedule.time_limit_hours` in the pulled setup record is missing or not a positive
+   number; report its `notes`, which say which; `code-moved` (exit 4) means the trading repository has a commit
+   outside `run/` that your pin check did not see, so the routine needs the new tree pinned; anything else means the
+   run never started (no setup record, a config error, an internal error).
 
 `r3.cjs` exits 0 when done; 1 on an internal error; 2 on a usage or config error (no setup record included), when
 another run holds a lock, or when the repository lock could not be taken; 3 when the run aborted (in a setup run: the
@@ -72,8 +80,9 @@ install's, a missing tool, a commit outside `run/` that the pin check did not se
 variable that is not the bot wallet's encrypted keystore, an allowlist that is missing or does not match
 `allowlistSha256`, an `ethers` install that failed, or a `signerDir` holding a signer of another mode) or the planner
 made a safety stop; 5 when there was nothing to trade on (`no-csv`, `csv-store-mismatch`) or the planner had a
-transport failure; 6 when the run's time budget ran out, or the run-ids holding fills outgrew
-`schedule.max_turns_run_ids` (`RESIZE SCHEDULE` in the report).
+transport failure (`nonce-lag`, a nonce that kept reading below what the run had proved, is one); 6 when the run's
+time budget ran out, or the run-ids holding fills outgrew `schedule.max_turns_run_ids` (`RESIZE SCHEDULE` in the
+report). With `attempts`, the exit code and the status are the last wake's.
 
 ## A setup run
 
@@ -111,6 +120,8 @@ scheduled task, on your own computer*). Everything above holds, with these diffe
   waiting on that same process until it ends; never start a second one. Without `--push` there is no repository
   lock: the clone's own lock keeps a trade now (the task's *Run now*) from overlapping a scheduled run. The second
   one's `install` refuses (exit 2, `lock-held`, nothing written), or its `trade` ends `lock-held`: stop and report.
+  A run's fresh wakes (step 2) run the same way inside that one command, under the clone's own lock; without
+  `--push` there is no origin to check between them, and the one timeout covers them all.
 - **Your commands** are the pin check, `node r3.cjs install`, `node r3.cjs trade` and `node r3.cjs status`, and you
   may read files. A Codex task has no tool lists: what bounds you is your prompt, this file, the Codex permissions the
   operator set and the Codex rules that make `node r3.cjs planner` ask (a scheduled task never asks, so that spelling
@@ -130,7 +141,8 @@ task*). Everything above holds, with these differences:
   environment".
 - **Step 2 is `node r3.cjs trade --push`**, as in a routine, with your shell tool's timeout (`timeout_ms`) set to
   `21600000`, never left at its default; if the tool yields while the command still runs, keep waiting on that same
-  process; never start a second one. A setup run's `selftest` and `clearance` take the same timeout.
+  process; never start a second one. A run's fresh wakes run inside that one command, as in a routine, so the one
+  timeout covers them all. A setup run's `selftest` and `clearance` take the same timeout.
 - **Pushing is what makes this cloud usable.** A JSON line's `pushed` is an object: if `pushed.pushed` is not `true`,
   report `pushed.error` and say the records were not pushed. On `lock-unavailable`, report its `notes`. A fetch that
   failed once, or a push refused because another push landed, can be passing: the next run tries again. Only a push
@@ -149,9 +161,15 @@ task*). Everything above holds, with these differences:
 
 ## Your reply
 
-A short report: the run-id; the status (`traded`, `nothing-to-do`, `no-csv`, `csv-store-mismatch`, `aborted`); what
-traded (positions sent, the stake); anything the report flags (a stop and its cause, a half-done group the next run
-will repair, a stuck nonce the run cancelled itself, a nonce anomaly, a gate refusal); `r3.cjs`'s exit code; and whether the records were pushed (when
+A short report. First one line per wake in `attempts` (a refusal at the gates, which has none: its run-id and `notes`): its run-id, its status (`traded`, `nothing-to-do`, `no-csv`,
+`csv-store-mismatch`, `aborted`), its `retry.why` and its `decision`; then `retry_stopped`, why no further wake ran.
+Then the run as a whole: what traded (positions sent, the stake); what a wake repaired (a "repaired by" note in an
+earlier run-id's `wake-status.json`); what was absorbed in place (nonce re-reads after a lagging RPC answer, in
+`report.md`); anything the reports flag (a stop and its cause, a half-done group the next run will repair, a stuck
+nonce the run cancelled itself, a nonce anomaly, a gate refusal); and what needs the operator, named by its kind with
+its action: the code or a pin (re-pin the tree, or the setup record's pins), an allowlist refusal (check the
+allowlist), too little ETH (fund ETH), no CSV (supply one), a lock left behind (remove it), another sender at the
+wallet (one sender per wallet). Then `r3.cjs`'s exit code and whether the records were pushed (when
 `repo_lock.released` is false, that the repository lock stays on origin until its expiry). Say plainly when nothing
 traded and why.
 
@@ -164,7 +182,9 @@ traded and why.
   any other send yourself: the planner's `wake` sends, through the signer, under the operator's standing authorization
   (`../steps/I-setup.md` I.2 §1). In this environment `r3.cjs` also refuses the planner's send entry points; that
   refusal is keyed on the key's environment variables, so it is one layer, not a wall.
-- Start a second run, retry a failed run, or edit any file. A failed run is repaired by the next scheduled run.
+- Start a second run, run `node r3.cjs trade --push` a second time, retry a failed run yourself, or edit any file.
+  `r3.cjs trade` decides and runs any fresh wake inside its one call; a failed run it did not retry is repaired by the
+  next scheduled run.
 - Push anything but what `r3.cjs` pushes (`run/` only), open a pull request, or change a branch.
 - Change the strategy. The operator changes a step (its rule in `../steps/` and, where the planner runs it, its
   module), tests it, clears the new commit with a setup run and updates the pinned tree in this routine's prompt;

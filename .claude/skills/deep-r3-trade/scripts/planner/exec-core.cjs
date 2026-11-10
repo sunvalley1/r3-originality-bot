@@ -4,8 +4,10 @@
 //
 // Per transaction, in this order (G section 8 step 3, Money rules):
 //   the caller's own fresh checks (the trading boundary, floors, the route), then the holder nonce latest == pending ==
-//   the nonce the plan gives it, the signer-input file equal to the plan and its keccak256 (through the helper) equal to
-//   the plan's, the signer's own `simulate` on live state, and THE PRE-SEND GAS CHECK (G section 8; the live fix):
+//   the nonce the plan gives it (a read below a nonce the run already proved is a lagging RPC, read again up to 8 times
+//   over about 30 s, then nonce-lag, exit 5: lib.readNonceAtLeast), the signer-input file equal to the plan and its
+//   keccak256 (through the helper) equal to the plan's, the signer's own `simulate` on live state, and THE PRE-SEND GAS
+//   CHECK (G section 8; the live fix):
 //     (a) gas_limit >= the fresh gas_used x 1.2, (b) gas_limit >= the peak the ordered simulation measured for that
 //     call (max_used_gas, else gas_used), (c) the fresh gas_used at most 10% above the plan's gas_used.
 //   Never the old `gasUsed x 1.5 <= gas_limit` form, which rejects every refund-free call once limits come from a real
@@ -76,6 +78,15 @@ function asStop(step, e) {
   if (e instanceof ToolFailure) return xstop(step, e.transient ? 'transport' : 'tool-failure', clip(e.message, 600), { transport: !!e.transient });
   return xstop(step, 'internal', clip(e && e.stack ? e.stack : String(e), 1200));
 }
+// Another sender at the wallet, as a stop's fields show it (G section 8, The nonce floor): a pending-transaction or
+// nonce-moved judged on a read at or above the run's nonce floor (fields.foreign true: no lag), or a transaction mined at
+// the run's own nonce that matches none of its attempts and is not the run's own cancel (a settlement Not sent with a
+// foreign transaction; own_cancel, set by settleNonce, marks the cancel). The fresh-wake verdict's class foreign (wake.cjs).
+function anotherSender(cause, f) {
+  if (!f) return false;
+  if (['pending-transaction', 'nonce-moved'].includes(cause) && f.foreign === true) return true;
+  const st = f.settlement; return !!(st && st.outcome === 'not-sent' && st.foreign && !st.own_cancel && !f.own_cancel);
+}
 
 // ---------------------------------------------------------------------------------------------------------------
 // The bookkeeping of one run-id: inflight.json, nonce-attempts.json (append-only; tx_hash completed in place),
@@ -143,6 +154,11 @@ function makeEnv(ctx, { step, holder, setup }) {
   };
   env.mcChunked = async (reads, chunk = 400) => { const out = []; let block = null; for (let i = 0; i < reads.length; i += chunk) { const r = await env.mc(reads.slice(i, i + chunk)); out.push(...r.results); block = r.block; } return { block, results: out }; };
   return env;
+}
+// The holder's nonce through the floor (lib.readNonceAtLeast, G section 8 The nonce floor): read again while it lags below
+// max(floor, what this process proved); floor null is the process floor alone. Re-reads counted in env.lagRereads.
+function readNonce(env, floor, where) {
+  return lib.readNonceAtLeast(env.H, env.holder, floor, { sleep: env.sleep || lib.sleep, log: env.ctx && env.ctx.log, step: env.step, where, tally: env });
 }
 
 // The signer, restricted subcommands only. A mode-switch refusal that names an unrelated environment variable on a
@@ -242,15 +258,33 @@ async function checkInputFile(env, book, tx, n) {
 }
 
 // Everything before the broadcast that does not write: nonce, file and hash, the signer's simulate, the gas check.
+const SIM_RERUN_MS = Object.freeze([4000, 8000]);
 async function presend(env, book, tx, n) {
   const where = `${tx.label} (nonce ${n})`;
   if (env.signerModeProblem) throw signerModeStop(env.step, env.signerModeProblem); // before any read or signer call
-  const nn = await env.H(['nonce', env.holder]);
-  if (nn.latest !== nn.pending) throw xstop(env.step, 'pending-transaction', `${where}: a transaction of the holder is pending (latest ${nn.latest}, pending ${nn.pending}); settle it before anything is sent`, { nonce: nn });
-  if (nn.latest !== n) throw xstop(env.step, 'nonce-moved', `${where}: the holder nonce is ${nn.latest}, the plan gives this transaction ${n}: a transaction the plan did not expect; reconcile from chain state`, { nonce: nn });
+  // n, the nonce the plan gives this transaction, is a floor: a read below it is a lagging RPC, read again; a read at or
+  // above it that is not latest == pending == n is another sender's transaction (foreign), judged at once
+  const nn = await readNonce(env, n, where);
+  if (nn.latest !== nn.pending) throw xstop(env.step, 'pending-transaction', `${where}: a transaction of the holder is pending (latest ${nn.latest}, pending ${nn.pending}); settle it before anything is sent`, { nonce: nn, foreign: true });
+  if (nn.latest !== n) throw xstop(env.step, 'nonce-moved', `${where}: the holder nonce is ${nn.latest}, the plan gives this transaction ${n}: a transaction the plan did not expect; reconcile from chain state`, { nonce: nn, foreign: true });
   const hash = await checkInputFile(env, book, tx, n);
-  const sr = await signerRun(env, 'simulate', tx.signer_input_file, [], { retries: HELPER_RETRIES }); // a throttle is re-run (lib.runSigner)
-  const sj = sr.last;
+  // a "simulated":true answer that failed (a status other than 0x1, the gas check, a pending nonce below n: a backend
+  // behind the head) is asked again after 4 s and 8 s, and only the last answer is judged; a pending nonce above n is
+  // judged at once, whatever the status (another sender's transaction at n is the likely cause of a failed one). A
+  // throttle or an RPC failure is re-run by lib.runSigner
+  let sr; let sj; let gc = null;
+  for (let k = 0; ; k++) {
+    sr = await signerRun(env, 'simulate', tx.signer_input_file, [], { retries: HELPER_RETRIES });
+    sj = sr.last;
+    if (!sj || sj.simulated !== true || k >= SIM_RERUN_MS.length) break;
+    if (Number.isInteger(sj.nonce) && sj.nonce > n) break;
+    const bad = sr.exit !== 0 || sj.ok !== true || !Array.isArray(sj.results) || !sj.results[0] || sj.results[0].status !== '0x1';
+    gc = bad ? null : gasCheck({ freshGas: BigInt(sj.results[0].gas_used), planGasUsed: tx.gas_used, planPeak: tx.max_used_gas, gasLimit: tx.gas_limit });
+    if (!bad && !(Number.isInteger(sj.nonce) && sj.nonce < n) && gc.ok) break;
+    env.ctx.log(`${where}: the signer's simulate answered ${bad ? 'a failure' : sj.nonce < n ? `pending nonce ${sj.nonce}, below ${n}` : `a failed gas check (${gc.part})`}; simulated again in ${SIM_RERUN_MS[k]} ms (re-run ${k + 1} of ${SIM_RERUN_MS.length})`);
+    env.simRereads = (env.simRereads || 0) + 1;
+    await (env.sleep || lib.sleep)(SIM_RERUN_MS[k]);
+  }
   // Only a "simulated":true answer is a simulation result (I-setup.md I.2 section 7, Rate limits; G section 8: a failure is
   // such an answer with a status other than 0x1, or a failed gas check). Everything else is no stale check:
   // a simulate the planner killed at its timeout (its output may be cut short, so it is not read) or still throttled after
@@ -266,12 +300,15 @@ async function presend(env, book, tx, n) {
     if (sj && sj.refused) throw fail('signer-refused', `the signer refused the simulate (${clip(sj.refused, 40)}${sj.rule ? ' ' + clip(sj.rule, 60) : ''}): ${clip(sj.detail, 200)}`, { refused: true });
     throw fail('tool-failure', `the signer's simulate gave no simulation result (exit ${sr.exit}): ${clip(sr.stdout || sr.stderr, 300)}`);
   }
+  // the signer's own pending read above n: a transaction at n this run did not send (another sender's, foreign), judged
+  // before the status, which that transaction may have made fail
+  if (Number.isInteger(sj.nonce) && sj.nonce > n) throw xstop(env.step, 'nonce-moved', `${where}: the signer's simulate reports pending nonce ${sj.nonce}, the plan ${n}`, { foreign: true });
   if (sr.exit !== 0 || sj.ok !== true || !Array.isArray(sj.results) || !sj.results[0] || sj.results[0].status !== '0x1') {
     throw xstop(env.step, 'stale-simulation', `${where}: the signer's own simulate on live state failed (exit ${sr.exit}): ${clip(sr.stdout || sr.stderr, 400)}`);
   }
   if (sj.nonce !== n) throw xstop(env.step, 'nonce-moved', `${where}: the signer's simulate reports pending nonce ${sj.nonce}, the plan ${n}`);
   const freshGas = BigInt(sj.results[0].gas_used);
-  const gc = gasCheck({ freshGas, planGasUsed: tx.gas_used, planPeak: tx.max_used_gas, gasLimit: tx.gas_limit });
+  gc = gasCheck({ freshGas, planGasUsed: tx.gas_used, planPeak: tx.max_used_gas, gasLimit: tx.gas_limit });
   if (!gc.ok) throw xstop(env.step, gc.kind, `${where}: pre-send gas check (${gc.part}) failed: ${gc.why}`);
   return { hash, freshGas, sim: sj };
 }
@@ -323,15 +360,36 @@ async function nonceSpentAt(env, n, lo, hi, inTime) {
     return { block: a };
   } catch (e) { return { block: null, why: clip(e && e.message || e, 160) }; }
 }
+// A receipt of the holder's transaction at n, or a transaction found mined at n, proves the chain passed n: n + 1 joins
+// the nonce floor (lib.readNonceAtLeast), so a later read of this process below it is read again, never judged. A foreign
+// transaction at n that is the run's own cancel (its hash in this run-id's nonce-cancels.json) is marked own_cancel, so
+// no caller takes it for another sender (anotherSender).
 async function settleNonce(env, book, n, o = {}) {
+  const s = await settleOnce(env, book, n, o);
+  if (s.outcome === 'landed' || (s.outcome === 'not-sent' && s.foreign)) lib.noteNonceFloor(env.holder, n + 1);
+  if (s.outcome === 'not-sent' && s.foreign) s.own_cancel = ownCancelAt(book, n, s.foreign.hash);
+  return s;
+}
+// an unreadable nonce-cancels.json proves nothing: false (the marker only steers the fresh-wake verdict)
+function ownCancelAt(book, n, hash) { try { return book.readJson('nonce-cancels.json', []).some((c) => c && c.nonce === n && c.hash && lc(c.hash) === lc(hash)); } catch (e) { return false; } }
+// the five reads a chain-mismatch needs: the first, then again after these waits
+const MISMATCH_REREAD_MS = Object.freeze([10000, 10000, 20000, 20000]);
+async function settleOnce(env, book, n, o = {}) {
   const att = liveAttempts(book.attempts(), n);
-  const nn = await env.H(['nonce', env.holder]);
+  let nn = await env.H(['nonce', env.holder]);
   const res = { n, latest: nn.latest, pending: nn.pending, attempts: att.length };
-  if (nn.latest < n) return { ...res, outcome: 'chain-mismatch', via: `the confirmed nonce ${nn.latest} is below the record's ${n}: the record comes from a chain state that no longer exists` };
+  // a receipt of a recorded hash proves the transaction is on this chain, so it is read before the nonce is judged
   for (const a of att) if (a.tx_hash) {
     const r = await env.H(['receipt', a.tx_hash]);
     if (r.found) return { ...res, outcome: 'landed', via: 'receipt of the recorded tx_hash', hash: a.tx_hash, receipt: r };
   }
+  // a confirmed nonce below n is a chain-mismatch only when it stays below over about 60 s (five reads): a lagging
+  // backend reads low for seconds, a chain state that no longer holds the record reads low for good
+  for (let k = 0; nn.latest < n && k < MISMATCH_REREAD_MS.length; k++) {
+    await (env.sleep || lib.sleep)(MISMATCH_REREAD_MS[k]);
+    nn = await env.H(['nonce', env.holder]); res.latest = nn.latest; res.pending = nn.pending;
+  }
+  if (nn.latest < n) return { ...res, outcome: 'chain-mismatch', via: `the confirmed nonce ${nn.latest} is below the record's ${n} in ${MISMATCH_REREAD_MS.length + 1} reads over about ${MISMATCH_REREAD_MS.reduce((a, b) => a + b, 0) / 1000} s, with no receipt for a recorded hash: the record comes from a chain state that no longer exists` };
   if (nn.latest > n) {
     const now = env.now || Date.now;
     const stopAt = o.deadlineMs || env.deadlineMs || now() + (o.budgetMs || SCAN_BUDGET_MS);
@@ -348,7 +406,7 @@ async function settleNonce(env, book, n, o = {}) {
       for (const t of blk.txs_from || []) {
         if (t.nonce !== n) continue;
         const m = att.some((a) => (a.tx_hash && lc(a.tx_hash) === lc(t.hash)) || (a.calldata_hash && lc(a.calldata_hash) === lc(t.input_keccak256) && (a.to === null || a.to === undefined || lc(a.to) === lc(t.to))));
-        if (m) { const r = await env.H(['receipt', t.hash]); if (!r.found) return { ...res, outcome: 'pending', via: `block ${bn}: matched, receipt not readable yet` }; return { ...res, outcome: 'landed', via: `block ${bn}: (nonce, to, input hash) match an attempt`, hash: t.hash, receipt: r }; }
+        if (m) { const r = await env.H(['receipt', t.hash]); if (!r.found) return { ...res, outcome: 'pending', wait: true, via: `block ${bn}: matched, receipt not readable yet` }; return { ...res, outcome: 'landed', via: `block ${bn}: (nonce, to, input hash) match an attempt`, hash: t.hash, receipt: r }; }
         if (att.every((a) => a.calldata_hash)) return { ...res, outcome: 'not-sent', foreign: { hash: t.hash, input_keccak256: t.input_keccak256, to: t.to, block: bn }, via: 'a foreign transaction mined at n matches no recorded attempt' };
         return { ...res, outcome: 'pending', via: 'a transaction is mined at n and an attempt with a null calldata_hash cannot be excluded' };
       }
@@ -375,7 +433,7 @@ async function settleNonce(env, book, n, o = {}) {
     } finally { if (b !== from) save(); }
     return fwd({ ...res, outcome: 'pending', via: b > head ? `latest ${nn.latest} > n but no transaction at n was found in blocks ${start}..${head}: unconfirmed, not failed` : `${b > from ? `scanned blocks ${from}..${b - 1}` : 'no block read'} of head ${head} within this run's time budget, no transaction at n yet: unconfirmed, not failed; resumes at block ${b} at the next settlement` });
   }
-  if (nn.pending > n) return { ...res, outcome: 'pending', via: 'the pending nonce is above n, the latest is not' };
+  if (nn.pending > n) return { ...res, outcome: 'pending', wait: true, via: 'the pending nonce is above n, the latest is not' };
   return { ...res, outcome: 'not-sent', via: 'latest == pending == n' };
 }
 
@@ -427,6 +485,7 @@ async function cancelStuckNonce(env, book, n, { trigger, recheckMs = 0 } = {}) {
     const conf = bc ? lines.find((j) => j.event === 'confirmed' && j.hash === bc.hash) || null : null;
     Object.assign(rec, { status: conf ? 'confirmed' : bc ? 'unconfirmed' : 'refused', hash: bc ? bc.hash : null, block: conf ? conf.block_number : null, signer_exit: r ? r.exit : null, detail: conf ? null : err || clip(JSON.stringify((r && r.last) || {}), 300) });
     book.writeJson('nonce-cancels.json', list); cancels.push(rec);
+    if (conf) lib.noteNonceFloor(env.holder, n + 1); // the cancel's receipt: the chain passed n (the nonce floor)
     s = await settleNonce(env, book, n);
     // a mined cancel that the next reads do not show yet (latest still n): read again, a few times
     for (let j = 0; j < 3 && conf && stuckNotSent(s); j++) { await nap(5000); s = await settleNonce(env, book, n); }
@@ -441,8 +500,10 @@ async function cancelStuckNonce(env, book, n, { trigger, recheckMs = 0 } = {}) {
 
 // ---------------------------------------------------------------------------------------------------------------
 // One transaction: write-ahead, ONE signer send, then confirmation (or settlement). Returns { hash, receipt }.
+// A send the signer answered with an RPC failure before signing is retired and re-entered through presend (above).
 // Throws a Stop carrying fields: pre_broadcast_refusal, send_lock_held, keep_aborted, settlement.
 // ---------------------------------------------------------------------------------------------------------------
+const PRE_SIGN_RETRY_MS = Object.freeze([5000, 15000, 30000]);
 async function broadcast(env, book, tx, n, hash, meta = {}) {
   const where = `${tx.label} (nonce ${n})`;
   if (env.signerModeProblem) throw signerModeStop(env.step, env.signerModeProblem); // before any write-ahead or send
@@ -475,22 +536,56 @@ async function broadcast(env, book, tx, n, hash, meta = {}) {
       book.retire(n, hash, `${last.refused ? 'refused: ' + last.refused + (last.rule ? ' ' + last.rule : '') : last.error || 'refused'}: ${clip(last.detail || '', 200)}`);
       book.settleInflight(); env.open = null;
       const sendLock = last.refused === 'send-lock';
-      throw xstop(env.step, sendLock ? 'send-lock-held' : 'signer-refused', `${where}: refused before any broadcast (signer exit ${r.exit}): ${clip(JSON.stringify(last), 400)}`, { pre_broadcast_refusal: true, send_lock_held: sendLock, keep_aborted: sendLock, lock_path: last.lock_path || null, lock_hash: last.lock ? last.lock.hash || null : null });
+      // an RPC failure before signing (no broadcast line, nothing signed) is no refusal: after a wait the send is re-entered
+      // through the whole pre-send check (the nonce floor, the file and its hash, the signer's simulate, the gas check),
+      // at most PRE_SIGN_RETRY_MS.length times; a simulation-reverted answer once. Every refusal of the signer is final
+      const k = meta.preRetries || 0;
+      const rpc = lib.signerRpcFailure(r.exit, last, r.lines || events);
+      const simRev = last.error === 'simulation-reverted' && !(r.lines || events).some((j) => j && (j.event === 'broadcast' || j.hash));
+      if (!sendLock && !last.refused && (rpc || simRev)) {
+        if (k < (rpc ? PRE_SIGN_RETRY_MS.length : 1)) {
+          env.ctx.log(`${where}: the signer's send answered ${last.error} before signing (${clip(last.detail || '', 120)}); the pre-send check and the send again in ${PRE_SIGN_RETRY_MS[k]} ms (re-entry ${k + 1})`);
+          env.preSignRetries = (env.preSignRetries || 0) + 1;
+          await (env.sleep || lib.sleep)(PRE_SIGN_RETRY_MS[k]);
+          const ps = await presend(env, book, tx, n);
+          return broadcast(env, book, tx, n, ps.hash, { ...meta, preRetries: k + 1 });
+        }
+      }
+      // a throttle that outlasted lib.runSigner's re-runs is no refusal either: it ends the group (exit 3, on to Half B),
+      // and the fresh-wake verdict reads it as a transport failure (throttled)
+      const thr = !sendLock && !last.refused && lib.signerThrottled('send', r.exit, last, r.lines || events) && !lib.signerReverted(last);
+      throw xstop(env.step, sendLock ? 'send-lock-held' : 'signer-refused', `${where}: refused before any broadcast (signer exit ${r.exit}): ${clip(JSON.stringify(last), 400)}`, { pre_broadcast_refusal: true, send_lock_held: sendLock, keep_aborted: sendLock, lock_path: last.lock_path || null, lock_hash: last.lock ? last.lock.hash || null : null, ...(!sendLock && !last.refused && (rpc || simRev) ? { transient: true, pre_sign_retries: k } : thr ? { transient: true, throttled: true } : {}) });
     }
     const s = await settleNonce(env, book, n);
     return afterUnclear(env, book, tx, n, s, `${where}: the signer exited ${r.exit} with no broadcast event and no refusal marker: ${clip(r.stdout || r.stderr, 300)}`);
   }
   if (lc(bc.input_hash) !== lc(hash) || bc.nonce !== n) throw xstop(env.step, 'hash-mismatch', `${where}: the broadcast reports input_hash ${bc.input_hash} nonce ${bc.nonce}, the attempt ${hash} nonce ${n}`, { keep_aborted: true });
   const conf = events.find((e) => e.event === 'confirmed' && e.hash === bc.hash);
-  if (r.exit === 0 && conf) return confirm(env, book, tx, n, bc.hash, meta);
+  if (r.exit === 0 && conf) return confirm(env, book, tx, n, bc.hash, { ...meta, signerBlock: conf.block_number });
   const s = await settleNonce(env, book, n);
   return afterUnclear(env, book, tx, n, s, `${where}: the signer ended with ${clip(JSON.stringify(last), 300)} (exit ${r.exit})`, meta);
 }
 
+// Pending settled again while it is only "not yet" (settleOnce's wait), on a schedule of waits, inside the time left.
+const PENDING_RESETTLE_MS = Object.freeze([...Array(12).fill(10000), ...Array(6).fill(30000)]); // 2 min, then 3 min more
+async function settleAgain(env, book, n, s, waits) {
+  const now = env.now || Date.now; const nap = env.sleep || lib.sleep;
+  const end = env.deadlineMs ? env.deadlineMs - CANCEL_ROOM_MS : Infinity;
+  for (let k = 0; k < waits.length && s.outcome === 'pending' && s.wait && now() + waits[k] < end; k++) {
+    if (k === 0) env.ctx.log(`nonce ${n} is Pending (${s.via}): settled again for up to ${Math.round(waits.reduce((a, b) => a + b, 0) / 60000)} min`);
+    await nap(waits[k]); env.resettles = (env.resettles || 0) + 1;
+    s = await settleNonce(env, book, n);
+  }
+  return s;
+}
 // A settled outcome of an unclear send: Landed with status 1 continues (G section 8 step 4); everything else stops.
 // Inside the wrapper, a not-sent finding on a signer that cannot pin the nonce is first consumed by the run's own
 // cancel, and a nonce settled for good gets the send-lock its unclear send left released (both above).
 async function afterUnclear(env, book, tx, n, s, why, meta = {}) {
+  // Pending on an answer that is only "not yet" (the pending nonce above n with the latest at n, or a matched block whose
+  // receipt is not readable yet): settled again every 10 s for 2 min, then every 30 s for 3 min more, never within
+  // CANCEL_ROOM_MS of the deadline; Landed, Not sent or still Pending then take the paths below (G section 8 step 4)
+  if (s.outcome === 'pending' && s.wait) s = await settleAgain(env, book, n, s, PENDING_RESETTLE_MS);
   if (selfClears(env)) {
     if (stuckNotSent(s) && !env.pin) {
       // read again a minute later first, so that a broadcast still on its way shows before any cancel
@@ -502,7 +597,7 @@ async function afterUnclear(env, book, tx, n, s, why, meta = {}) {
       if (rl.note) { env.ctx.log(rl.note); why = `${why}; ${rl.note}`; }
     }
   }
-  const settlement = { outcome: s.outcome, via: s.via, hash: s.hash || null, latest: s.latest, pending: s.pending, foreign: s.foreign || null };
+  const settlement = { outcome: s.outcome, via: s.via, hash: s.hash || null, latest: s.latest, pending: s.pending, foreign: s.foreign || null, own_cancel: !!s.own_cancel };
   env.ctx.log(`settlement of nonce ${n}: ${JSON.stringify(settlement)}`);
   if (s.outcome === 'landed' && s.receipt && s.receipt.success === true) return confirm(env, book, tx, n, s.hash, meta, settlement);
   if (s.outcome === 'landed') { book.settleInflight(); env.open = null; throw xstop(env.step, 'reverted', `${why}; settled: the transaction landed and reverted (${s.hash})`, { settlement, landed_reverted: s.hash }); }
@@ -513,28 +608,47 @@ async function afterUnclear(env, book, tx, n, s, why, meta = {}) {
     // re-settles nonce n, and sends its own cancel, until a transaction consumes n (I-setup.md I.2 section 6)
     if (env.pin || s.foreign) book.settleInflight();
     env.open = null;
-    throw xstop(env.step, 'not-sent', `${why}; settled Not sent (${s.via})${s.foreign ? `; foreign transaction ${s.foreign.hash} input_keccak256 ${s.foreign.input_keccak256} at nonce ${n}` : ''}`, { settlement, keep_aborted: !env.pin && !s.foreign, foreign: s.foreign || null });
+    // the transaction mined at n is the run's own cancel (recorded in this run-id's nonce-cancels.json) or another
+    // sender's: own_cancel (settleNonce) tells them apart for the fresh-wake verdict (anotherSender, above)
+    const ownCancel = !!s.foreign && !!s.own_cancel;
+    throw xstop(env.step, 'not-sent', `${why}; settled Not sent (${s.via})${s.foreign ? `; ${ownCancel ? 'the run\'s own cancel' : 'foreign transaction'} ${s.foreign.hash} input_keccak256 ${s.foreign.input_keccak256} at nonce ${n}` : ''}`, { settlement, keep_aborted: !env.pin && !s.foreign, foreign: s.foreign || null, own_cancel: ownCancel });
   }
   if (s.outcome === 'chain-mismatch') throw xstop(env.step, 'chain-mismatch', `${why}; ${s.via}`, { settlement, keep_aborted: true });
   throw xstop(env.step, 'pending', `${why}; nonce ${n} is Pending (${s.via}): no recovery is built and nothing more is sent; the next run's start-of-run repair settles it`, { settlement, keep_aborted: true, pending_hash: env.open ? env.open.tx_hash : null, pending_nonce: n });
 }
 
+const RECEIPT_REREADS = 5;
+const RECEIPT_REREAD_MS = 2000;
 async function confirm(env, book, tx, n, hash, meta = {}, settlement = null) {
   const where = `${tx.label} (nonce ${n})`;
-  const rc = await env.H(['receipt', hash]);
+  let rc = await env.H(['receipt', hash]);
+  // the signer printed `confirmed` with its block: a helper answer without the receipt is a backend behind that block,
+  // read again up to 5 times, 2 s apart, before the nonce is settled from chain state
+  for (let k = 0; !rc.found && meta.signerBlock !== undefined && meta.signerBlock !== null && k < RECEIPT_REREADS; k++) {
+    await (env.sleep || lib.sleep)(RECEIPT_REREAD_MS); env.receiptRereads = (env.receiptRereads || 0) + 1;
+    rc = await env.H(['receipt', hash]);
+  }
   if (!rc.found) { const s = await settleNonce(env, book, n); if (!(s.outcome === 'landed' && s.receipt && s.receipt.success)) return afterUnclear(env, book, tx, n, s, `${where}: no receipt for ${hash} through the helper`, meta); return confirm(env, book, tx, n, s.hash, meta, settlement); }
+  // a receipt of the holder's transaction at n, reverted or not, proves the chain passed n: n + 1 joins the nonce floor
+  // (lib.readNonceAtLeast), so a later read of this process below it (a recovery's, after a revert) is read again
+  if (lc(rc.from) === env.holder) lib.noteNonceFloor(env.holder, n + 1);
   if (rc.success !== true) { book.settleInflight(); env.open = null; throw xstop(env.step, 'reverted', `${where}: receipt of ${hash} shows status ${rc.status}`, { landed_reverted: hash }); }
   if (lc(rc.from) !== env.holder || lc(rc.to) !== lc(tx.to)) throw xstop(env.step, 'hash-mismatch', `${where}: receipt from ${rc.from} to ${rc.to}, expected the holder to ${tx.to}`, { keep_aborted: true });
   book.settleInflight(); env.open = null;
   const cost = BigInt(rc.gas_used) * BigInt(rc.effective_gas_price) + BigInt(rc.l1_fee || 0);
   const rec = { at: lib.nowIso(), source: meta.source || env.step, group: meta.group || null, idx: tx.idx === undefined ? null : tx.idx, label: tx.label, nonce: n, tx_hash: hash, block: rc.block_number, to: lc(tx.to), gas_limit: String(tx.gas_limit), gas_used: rc.gas_used, effective_gas_price: rc.effective_gas_price, l1_fee: rc.l1_fee || '0', cost_wei: cost.toString(), rebuilt: !!tx.rebuilt, settled_via: settlement ? settlement.via : null };
   book.addSend(rec);
-  env.sentThisInvocation++;
-  // the transaction landed and is recorded; only then is the nonce judged (a move after it is someone else's send)
-  const n2 = await env.H(['nonce', env.holder]);
-  if (n2.latest !== n + 1 || n2.pending !== n + 1) { const e = xstop(env.step, n2.latest !== n2.pending ? 'pending-transaction' : 'nonce-moved', `${where}: landed (${hash}), but after its receipt latest ${n2.latest} pending ${n2.pending}, expected ${n + 1}`); e.landed = { hash, receipt: rc, record: rec }; throw e; }
-  env.ctx.log(`  confirmed ${hash} block ${rc.block_number} gas ${rc.gas_used} cost ${eth(cost)}; nonce now ${n2.latest}`);
-  return { hash, receipt: rc, record: rec };
+  // the transaction landed and is recorded; only then is the nonce judged (a move after it is someone else's send). Its
+  // receipt proves the chain passed n, so n + 1 is the floor: a read below it is a lagging RPC, read again (30 Oct's
+  // `latest 4341 pending 4342` after the receipt at 4341), and only a read at or above it is judged. Any error from here
+  // on, a transport failure included, carries e.landed, so a stop keeps the landed hash (exec stopRun, halfb, recovery).
+  try {
+    env.sentThisInvocation++;
+    const n2 = await readNonce(env, n + 1, where);
+    if (n2.latest !== n + 1 || n2.pending !== n + 1) throw xstop(env.step, n2.latest !== n2.pending ? 'pending-transaction' : 'nonce-moved', `${where}: landed (${hash}), but after its receipt latest ${n2.latest} pending ${n2.pending}, expected ${n + 1}: a transaction this run did not send`, { nonce: n2, foreign: true });
+    env.ctx.log(`  confirmed ${hash} block ${rc.block_number} gas ${rc.gas_used} cost ${eth(cost)}; nonce now ${n2.latest}`);
+    return { hash, receipt: rc, record: rec };
+  } catch (e) { if (e && typeof e === 'object' && !e.landed) e.landed = { hash, receipt: rc, record: rec }; throw e; }
 }
 
 // The standing authorization (I-setup.md I.2 section 1, G section 8 Two modes): an autonomous send needs all four set
@@ -568,9 +682,10 @@ function clockAdd(env, ms, n) { env.clock = env.clock || { ms: 0, n: 0 }; env.cl
 
 module.exports = {
   RESERVE_WEI, STALE_APPROVAL_MS, SCAN_BUDGET_MS, toWei, weiStr, num, eth, pad, lc,
-  xstop, asStop, Book, positionsOpened, liveAttempts, makeEnv, signerRun,
+  xstop, asStop, anotherSender, Book, positionsOpened, liveAttempts, makeEnv, readNonce, signerRun,
   REFUSED_SIGNER_MODE, SIGNER_MODE_NOTE, signerModeProblem, signerModeStop, refuseSignerMode,
   lockMode, lockHeldStop, takeLock, releaseLock, lockStillOurs,
   affordability, gasCheck, checkInputFile, presend, settleNonce, broadcast, groupFits, clockAdd, gateProblems,
   STUCK_RECHECK_MS, CANCEL_ROOM_MS, selfClears, releaseSendLock, cancelStuckNonce,
+  SIM_RERUN_MS, MISMATCH_REREAD_MS, PRE_SIGN_RETRY_MS, RECEIPT_REREADS, RECEIPT_REREAD_MS, PENDING_RESETTLE_MS, settleAgain,
 };

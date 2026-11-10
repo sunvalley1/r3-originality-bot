@@ -166,7 +166,7 @@ function makeIO(ctx) {
     stats.simulates++;
     return H(['simulate', ctx.rel(name)]);
   }
-  return { H, mcb, mc, mcChunked, quotes, simulate, stats, isRevert, getCalls: () => calls };
+  return { H, mcb, mc, mcChunked, quotes, simulate, stats, isRevert, getCalls: () => calls, log: (m) => ctx.log(m) };
 }
 
 // The groups-file form of a list of plan groups: {calls: [{to, data, value[, return]}]}.
@@ -258,10 +258,13 @@ function pageProblems(page, { entries, count, pendingNonce }) {
 }
 
 // The holder's nonce must be what the plan was built on: latest == pending == the plan's pending nonce (G section 8).
+// The read goes through the nonce floor (lib.readNonceAtLeast; G section 8, The nonce floor): want when given, else the
+// floor this process proved (a wake's PSM3 ramp, say), so a lagging read is read again and only one at or above it is
+// judged.
 async function checkNonce(io, holder, want, where) {
-  const n = await io.H(['nonce', holder]);
-  if (n.latest !== n.pending) throw gsafety('pending-transaction', `${where}: a transaction of the holder is pending (latest ${n.latest}, pending ${n.pending}): settle it before building a plan`, { nonce: n });
-  if (want !== undefined && want !== null && n.pending !== want) throw gsafety('nonce-moved', `${where}: the holder nonce moved since the plan's read (${want} -> ${n.pending}): a send happened outside this plan`, { nonce: n });
+  const n = await lib.readNonceAtLeast(io.H, holder, want !== undefined && want !== null ? want : null, { log: io.log, sleep: io.sleep, step: 'G', where });
+  if (n.latest !== n.pending) throw gsafety('pending-transaction', `${where}: a transaction of the holder is pending (latest ${n.latest}, pending ${n.pending}): settle it before building a plan`, { nonce: n, foreign: true });
+  if (want !== undefined && want !== null && n.pending !== want) throw gsafety('nonce-moved', `${where}: the holder nonce moved since the plan's read (${want} -> ${n.pending}): a send happened outside this plan`, { nonce: n, foreign: true });
   return n;
 }
 

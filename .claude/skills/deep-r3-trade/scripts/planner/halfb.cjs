@@ -225,8 +225,10 @@ async function buildLevel(R, level) {
 
 // simulate the level (one request, or windows), give every transaction its gas fields, its nonce and its signer file
 async function prepareLevel(R, groups, level) {
-  const nn = await R.env.H(['nonce', R.env.holder]);
-  if (nn.latest !== nn.pending) throw stop('pending-transaction', `a transaction of the holder is pending (latest ${nn.latest}, pending ${nn.pending}); nothing of Half B is sent`, { keep_aborted: true });
+  // the process floor: a read below what this run proved is a lagging RPC, read again (exec-core readNonce). With sends
+  // blocked by a nonce of this arm left unsettled, a pending transaction may be that one, so it is not marked foreign
+  const nn = await X.readNonce(R.env, null, `Half B level ${level}`);
+  if (nn.latest !== nn.pending) throw stop('pending-transaction', `a transaction of the holder is pending (latest ${nn.latest}, pending ${nn.pending}); nothing of Half B is sent`, { keep_aborted: true, foreign: !R.ctx.opts.blockSends });
   const io = { simulate: async (name, gs) => { R.wctx.writeRun(name, JSON.stringify(gs)); return R.env.H(['simulate', R.wctx.rel(name)]); } };
   const sim = await G.simulatePlan(R.wctx, io, groups, 0, `halfb-sim-l${level}`);
   const problems = [];
@@ -266,19 +268,21 @@ async function sendLevel(R, groups) {
     const g = groups[gi];
     // a skip names its kind (the stop cause run() raises: exit 3, README section 6) and the groups it covers
     const skipRest = (kind, why, extra = {}) => { out.skipInfo = { kind, why: clip(why, 400), ...extra }; for (const h of groups.slice(gi)) out.skipped.push({ id: h.id, why: clip(why, 400) }); };
-    if (g.txs.some((t) => t.sim_status !== '0x1')) { skipRest('stale-simulation', `the level's simulation failed (or the signer's check refused a transaction) at or before ${g.id} (G section 8, A failing pre-send simulation)`); break; }
+    // refused: the signer's policy check refused a file of the level (never a fresh wake: wake.cjs retryVerdict)
+    if (g.txs.some((t) => t.sim_status !== '0x1')) { skipRest('stale-simulation', `the level's simulation failed (or the signer's check refused a transaction) at or before ${g.id} (G section 8, A failing pre-send simulation)`, groups.slice(gi).some((h) => h.txs.some((t) => t.sim_status === 'refused')) ? { refused: true } : {}); break; }
     const fit = X.groupFits(R.env, g.txs.length, R.deadlineMs);
     if (!fit.ok) { skipRest('time-budget', 'turn/time budget exhausted before this Half B step'); R.budgetExhausted = true; break; }
     const af = await X.affordability(R.env, g.txs);
     if (!af.ok) { skipRest('affordability', `affordability: ${af.text} (G section 8)`, { eth: af.eth.toString(), need: af.need.toString() }); break; }
     const book = R.books[g.book] || (R.books[g.book] = new X.Book(R.ctx.cfg, g.book));
-    const t0 = Date.now(); let landed = 0;
+    const t0 = Date.now(); let landed = 0; let cur = null;
     try {
       // the boundary of this level, read fresh, as it must be for the operation (a flip makes it stale)
       const W2 = await readWorld(R.env, g.levelRef.type === 'kid' ? new Set([g.levelRef.addr]) : new Set());
       const lvl = g.levelRef.type === 'kid' ? W2.kids[g.levelRef.addr] : g.levelRef.type === 'middle' ? W2.middles[g.levelRef.x] : W2.parent;
       const bo = boundaryOk(lvl, g.op, W2); if (!bo.ok) throw stop('stale-boundary', `${g.id}: ${bo.why} (G section 3: the batch is stale)`);
       for (const t of g.txs) {
+        cur = t;
         const ps = await X.presend(R.env, book, t, t.nonce_expected);
         const res = await X.broadcast(R.env, book, t, t.nonce_expected, ps.hash, { source: `halfb:${R.ctx.runId}`, group: g.id });
         t.hash = res.hash; landed++;
@@ -288,6 +292,9 @@ async function sendLevel(R, groups) {
       out.sent.push({ id: g.id, book: g.book, txs: g.txs.map((t) => t.hash) });
     } catch (e) {
       const s = X.asStop(STEP, e);
+      // the transaction in flight that landed although the call stopped (exec-core confirm's e.landed: a nonce read after
+      // its receipt, say; or its settlement below reads Landed) counts as landed, its hash kept
+      if (cur && !cur.hash && e && e.landed && e.landed.hash) { cur.hash = e.landed.hash; landed++; }
       if (R.env.open) {
         try {
           const st = await X.settleNonce(R.env, book, R.env.open.n);
@@ -296,10 +303,16 @@ async function sendLevel(R, groups) {
           const keepOpen = st.outcome === 'not-sent' && !R.env.pin && !st.foreign;
           if (st.outcome === 'landed' || (st.outcome === 'not-sent' && !keepOpen)) book.settleInflight();
           if (st.outcome === 'pending' || keepOpen) s.fields = { ...s.fields, keep_aborted: true };
+          if (st.outcome === 'landed' && st.receipt && st.receipt.success && cur && !cur.hash && cur.nonce_expected === R.env.open.n) { cur.hash = st.hash; landed++; }
+          s.fields = { ...s.fields, settlement: { outcome: st.outcome, via: st.via, hash: st.hash || null, foreign: st.foreign || null, own_cancel: !!st.own_cancel } };
         } catch (x) { s.fields = { ...s.fields, keep_aborted: true }; }
         R.env.open = null;
       }
-      out.stop = { kind: s.cause, notes: s.notes, exit: s.exit, fields: s.fields, group: g.id, landed, half_done: landed > 0 ? { group: g.id, landed, of: g.txs.length, txs: g.txs.filter((t) => t.hash).map((t) => t.hash) } : null };
+      // the group's last transaction landed: the group is whole, so its rows are written as on success (whatever stopped
+      // after its receipt), never left for a repair that may never scan a final run-id
+      const whole = landed === g.txs.length;
+      if (whole) { book.addRows(rowsFor(g, g.txs[g.txs.length - 1].hash)); out.sent.push({ id: g.id, book: g.book, txs: g.txs.map((t) => t.hash) }); }
+      out.stop = { kind: s.cause, notes: s.notes, exit: s.exit, fields: s.fields, group: g.id, landed, half_done: landed > 0 && !whole ? { group: g.id, landed, of: g.txs.length, txs: g.txs.filter((t) => t.hash).map((t) => t.hash) } : null };
       for (const h of groups.slice(gi + 1)) out.skipped.push({ id: h.id, why: `not started: Half B stopped at ${g.id}: ${clip(s.cause, 80)}` });
       break;
     }
@@ -386,7 +399,7 @@ async function run(ctx) {
     decided_but_unreported: decided, resize_schedule: resize, merge_bounds_at_read: merge_bounds,
   };
   ctx.detail.answer_watch_state = watchNow;
-  if (!rec) return { ...base, actionable: [], sent: [], skipped: [], notes, artifacts: [], nothing_actionable: true };
+  if (!rec) return { ...base, actionable: [], sent: [], skipped: [], notes, artifacts: [], nothing_actionable: true, nonce_rereads: 0 };
 
   // ---- the levels, in order; each level built from balances read after the one below landed
   const actionable = []; const sent = []; const skipped = []; let stopInfo = null; let skipInfo = null; const halfDone = [];
@@ -443,11 +456,13 @@ async function run(ctx) {
   // a group skipped for affordability, the time budget or a failed or refused simulation is named in notes (the wake
   // copies them into wake-status.json) and is a stop the skill defines, exit 3 (G section 8, Affordability)
   if (!stopInfo && skipInfo) skipped.forEach((s) => notes.push(`Half B skipped ${s.id}: ${s.why}`));
-  const res = { ...base, actionable, sent, skipped, half_done: halfDone, notes, artifacts: artifacts(), sends_this_invocation: env.sentThisInvocation, keep_aborted: !!(stopInfo && stopInfo.fields && stopInfo.fields.keep_aborted), budget_exhausted: R.budgetExhausted };
-  if (stopInfo) throw new Stop({ step: STEP, cause: stopInfo.kind, status: 'aborted', notes: stopInfo.notes, exit: stopInfo.exit, fields: { ...res, half_b_stop: { kind: stopInfo.kind, group: stopInfo.group } } });
+  const res = { ...base, actionable, sent, skipped, half_done: halfDone, notes, artifacts: artifacts(), sends_this_invocation: env.sentThisInvocation, keep_aborted: !!(stopInfo && stopInfo.fields && stopInfo.fields.keep_aborted), budget_exhausted: R.budgetExhausted, nonce_rereads: env.lagRereads || 0 };
+  // half_b_stop names what the fresh-wake verdict reads (wake.cjs): another sender at the wallet, a transient refusal,
+  // the open nonce's settlement outcome
+  if (stopInfo) throw new Stop({ step: STEP, cause: stopInfo.kind, status: 'aborted', notes: stopInfo.notes, exit: stopInfo.exit, fields: { ...res, half_b_stop: { kind: stopInfo.kind, group: stopInfo.group, another_sender: X.anotherSender(stopInfo.kind, stopInfo.fields), transient: !!(stopInfo.fields && stopInfo.fields.transient), settlement: (stopInfo.fields && stopInfo.fields.settlement && stopInfo.fields.settlement.outcome) || null } } });
   if (skipInfo) {
     const cause = skipInfo.kind === 'affordability' ? 'affordability-skip' : skipInfo.kind === 'time-budget' ? 'time-budget' : 'stale-simulation';
-    throw new Stop({ step: STEP, cause, status: null, notes: skipInfo.why, exit: EXIT.STOP, fields: { ...res, keep_aborted: false, skipped_groups: skipped.map((s) => s.id).slice(0, 20), skipped_count: skipped.length, ...(skipInfo.eth ? { eth: skipInfo.eth, need: skipInfo.need } : {}) } });
+    throw new Stop({ step: STEP, cause, status: null, notes: skipInfo.why, exit: EXIT.STOP, fields: { ...res, keep_aborted: false, skipped_groups: skipped.map((s) => s.id).slice(0, 20), skipped_count: skipped.length, ...(skipInfo.eth ? { eth: skipInfo.eth, need: skipInfo.need } : {}), ...(skipInfo.refused ? { refused: true } : {}) } });
   }
   return res;
 }

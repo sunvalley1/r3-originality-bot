@@ -391,11 +391,22 @@ function spawnNode(cfg, script, args, { onLine, env, timeoutMs } = {}) {
   });
 }
 
+// A simulate answer that one flaky backend can give (I-setup.md I.2 section 7, Rate limits): a simulate_failed whose node
+// code is outside the eth_simulateV1 refusals (-38000 to -38999, the node's own verdict on the calls), a malformed
+// answer, or simulate_unsupported (its text also matches "header not found"). Re-run up to SIM_FLAKY_RETRIES times
+// (never more than the caller's retries); still failing, it is the step's answer as before (not transient).
+const SIM_FLAKY_RETRIES = 2;
+function simFlaky(code, j) {
+  if (code === 'simulate_malformed' || code === 'simulate_unsupported') return true;
+  if (code !== 'simulate_failed') return false;
+  const rc = Number(j && j.rpc_code); return !(Number.isInteger(rc) && rc <= -38000 && rc >= -38999);
+}
+
 // Run the read-only chain helper. Returns { json, attempts }. Throws ToolFailure.
 // retries: re-runs on a transient failure (default 5; 0 for `data`, whose failures take C's fallback instead).
-async function runHelper(cfg, args, { retries = DEFAULT_RETRIES, log } = {}) {
+async function runHelper(cfg, args, { retries = DEFAULT_RETRIES, log, sleep: nap = sleep } = {}) {
   if (!Array.isArray(args) || !args.length || args.some((a) => typeof a !== 'string' || /^--/.test(a))) throw new PlannerError('internal', 'helper arguments must be plain strings (the helper takes no options)', EXIT.INTERNAL);
-  let attempt = 0;
+  let attempt = 0; let flaky = 0;
   for (;;) {
     attempt++;
     await acquire(cfg);
@@ -410,7 +421,13 @@ async function runHelper(cfg, args, { retries = DEFAULT_RETRIES, log } = {}) {
     if (transient && attempt <= retries) {
       stats.helperRetries++;
       if (log) log(`helper ${args[0]} transient failure (${code || 'exit ' + exit}), re-run ${attempt} of ${retries}`);
-      await sleep(Math.min(20000, 1500 * attempt));
+      await nap(Math.min(20000, 1500 * attempt));
+      continue;
+    }
+    if (!transient && exit === 5 && simFlaky(code, j) && flaky < Math.min(SIM_FLAKY_RETRIES, retries)) {
+      flaky++; stats.helperRetries++;
+      if (log) log(`helper ${args[0]} answered ${code}${j && j.rpc_code !== undefined ? ' ' + j.rpc_code : ''}, re-run ${flaky} of ${SIM_FLAKY_RETRIES}`);
+      await nap(2000 * flaky);
       continue;
     }
     throw new ToolFailure({ tool: 'helper', args, helperExit: exit, code, json: j, text, transient, attempts: attempt });
@@ -434,7 +451,27 @@ function signerThrottled(sub, code, last, lines) {
   if (SIGNER_SENDS.has(sub)) return last.signed === false && last.broadcast === false && !lines.some((j) => j && (j.event === 'broadcast' || j.hash));
   return sub === 'simulate' || sub === 'reconcile';
 }
-async function runSigner(cfg, sub, file, extra = [], { onLine, env, retries = 0, log } = {}) {
+// The signer's RPC failure before signing (I-setup.md I.2 section 7, Rate limits), apart from a throttle: an rpc-error,
+// rpc-http or rpc-transport answer with no "simulated":true whose node code is not 3 (a revert) or -38000 to -38999 (the
+// node's own eth_simulateV1 refusal) and whose detail does not say revert. On the read-only `simulate` and `reconcile` it
+// is re-run up to 3 times, after 2, 5 and 10 s; still failing, it is the answer (simulate: transport; reconcile: status
+// error). A send with that answer is never re-run here: exec-core re-enters it through the pre-send checks (signerRpcFailure).
+const SIGNER_RPC_RETRY_MS = Object.freeze([2000, 5000, 10000]);
+// the node's own answer, never a transport one: a revert (rpc_code 3, or a detail that says revert) or eth_simulateV1's
+// refusal (-38000 to -38999), whatever else its text says (a revert reason may name a "capacity")
+function signerReverted(last) {
+  const rc = Number(last && last.rpc_code);
+  return (Number.isInteger(rc) && (rc === 3 || (rc <= -38000 && rc >= -38999))) || /revert/i.test(String((last && last.detail) || ''));
+}
+function signerRpcFailure(code, last, lines = []) {
+  if (code === 0 || !last || last.simulated === true || !SIGNER_RPC_ERRORS.has(last.error) || RATE_LIMIT_TEXT.test(String(last.detail || ''))) return false;
+  if (signerReverted(last)) return false;
+  return last.signed === false && last.broadcast === false && !lines.some((j) => j && (j.event === 'broadcast' || j.hash));
+}
+function signerRetryable(sub, code, last, lines) {
+  return (sub === 'simulate' || sub === 'reconcile') && signerRpcFailure(code, last, lines);
+}
+async function runSigner(cfg, sub, file, extra = [], { onLine, env, retries = 0, log, sleep: nap = sleep } = {}) {
   if (!SIGNER_SUBS.has(sub)) throw new PlannerError('internal', `the planner runs only the signer's check, simulate, send, clear-nonce and reconcile (not ${clip(sub, 20)})`, EXIT.INTERNAL);
   if (!Array.isArray(extra) || extra.some((a) => typeof a !== 'string')) throw new PlannerError('internal', 'signer arguments must be strings', EXIT.INTERNAL);
   if (sub === 'reconcile') {
@@ -449,7 +486,7 @@ async function runSigner(cfg, sub, file, extra = [], { onLine, env, retries = 0,
   }
   const args = sub === 'reconcile' ? [sub] : [sub, file, ...extra];
   const maxRetries = sub === 'check' ? 0 : retries;
-  let attempt = 0;
+  let attempt = 0; let rpcRetries = 0;
   for (;;) {
     attempt++;
     const lines = [];
@@ -461,10 +498,56 @@ async function runSigner(cfg, sub, file, extra = [], { onLine, env, retries = 0,
     const rateLimited = !r.timedOut && signerThrottled(sub, r.code, last, lines);
     if (rateLimited && attempt <= maxRetries) {
       if (log) log(`signer ${sub} rate-limited, re-run ${attempt} of ${maxRetries}`);
-      await sleep(Math.min(20000, 1500 * attempt));
+      await nap(Math.min(20000, 1500 * attempt));
+      continue;
+    }
+    if (!r.timedOut && maxRetries > 0 && rpcRetries < SIGNER_RPC_RETRY_MS.length && signerRetryable(sub, r.code, last, lines)) {
+      if (log) log(`signer ${sub} met an RPC failure (${last.error}${last.rpc_code !== undefined ? ' ' + last.rpc_code : ''}), re-run ${rpcRetries + 1} of ${SIGNER_RPC_RETRY_MS.length}`);
+      await nap(SIGNER_RPC_RETRY_MS[rpcRetries++]);
       continue;
     }
     return { exit: r.code, last, lines: lines.filter(Boolean), stdout: r.stdout, stderr: r.stderr, attempts: attempt, timedOut: r.timedOut };
+  }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// The holder's nonce floor (steps/G-mint-and-trade.md section 8, The nonce floor). A public RPC behind a load balancer can
+// answer from a backend a few blocks behind, so a nonce read can come back below what this process has already proven
+// the chain passed (30 Oct: `latest 4341 pending 4342` 1.6 s after the run's own receipt at 4341). The floor is that
+// proof, kept per holder for the life of the process (one wake: exec-core, exec, halfb, the ramp and G share it; g-lib
+// does not load exec-core): raised by the `latest` of every floor read and by n + 1 after every receipt of the holder's
+// transaction at n, never by a `pending`. A read below it, or a `pending` below its own `latest` (no answer), is read
+// again; a value at or above it is judged at once, because a lagging backend can only be low and only another sender can
+// raise the nonce. Every step is a read: nothing is waited on at or above the floor and nothing is sent twice.
+// ---------------------------------------------------------------------------------------------------------------
+const NONCE_FLOORS = new Map(); // lowercase holder -> the nonce this process has proven the chain passed
+const NONCE_REREAD_MS = Object.freeze([2000, 2000, 3000, 3000, 5000, 5000, 5000, 5000]); // 8 re-reads, about 30 s (15 OP blocks)
+let nonceRereadCount = 0; // every re-read of this process (the wake's note)
+function nonceFloor(holder) { return NONCE_FLOORS.get(lc(holder)) || 0; }
+function noteNonceFloor(holder, n) { if (Number.isInteger(n) && n > nonceFloor(holder)) NONCE_FLOORS.set(lc(holder), n); return nonceFloor(holder); }
+const nonceRereads = () => nonceRereadCount;
+// The holder's nonce (H: a helper call answering its JSON), read again while it is below max(floor, the process floor)
+// or its pending is below its latest. The first read that is neither is returned and judged by the caller exactly as
+// before; a pending-transaction or nonce-moved the caller throws after it carries fields.foreign: the read is no lag,
+// so the value is another sender's (or one of this arm's own nonces not yet settled, which the start-of-run repair
+// names). Still below after the 8 re-reads: a transport failure (nonce-lag, exit 5), never a safety stop.
+// tally.lagRereads counts the re-reads for the step's summary (nonce_rereads).
+async function readNonceAtLeast(H, holder, floor, { sleep: nap = sleep, log, step = 'G', where = 'the nonce read', tally = null } = {}) {
+  for (let k = 0; ; k++) {
+    const n = await H(['nonce', holder]);
+    const ints = !!n && Number.isInteger(n.latest) && Number.isInteger(n.pending);
+    if (ints) noteNonceFloor(holder, n.latest); // a latest is a lower bound the chain has passed, however late the backend
+    const f = Math.max(Number.isInteger(floor) ? floor : 0, nonceFloor(holder));
+    if (ints && n.latest >= f && n.pending >= f && n.pending >= n.latest) return n;
+    const seen = `latest ${n && n.latest} pending ${n && n.pending}`;
+    const why = ints && n.latest >= f && n.pending >= f ? 'a pending below its latest (no answer)' : `below the ${f} the run already proved (its own receipt or an earlier read)`;
+    if (k >= NONCE_REREAD_MS.length) {
+      const secs = Math.round(NONCE_REREAD_MS.reduce((a, b) => a + b, 0) / 1000);
+      throw new Stop({ step, cause: 'nonce-lag', status: 'aborted', exit: EXIT.TRANSPORT, notes: `${where}: after ${k + 1} reads over about ${secs} s the holder nonce still reads ${seen}, ${why}: a lagging RPC, not another sender; nothing more is sent`, fields: { nonce: n, floor: f, reads: k + 1, transport: true } });
+    }
+    nonceRereadCount++; if (tally) tally.lagRereads = (tally.lagRereads || 0) + 1;
+    if (log) log(`${where}: the holder nonce reads ${seen}, ${why}: a lagging RPC; read again in ${NONCE_REREAD_MS[k]} ms (re-read ${k + 1} of ${NONCE_REREAD_MS.length})`);
+    await nap(NONCE_REREAD_MS[k]);
   }
 }
 
@@ -590,7 +673,8 @@ async function runStep({ cfg, sub, runId, opts = {}, allowCsv = false, step = nu
 function renderSummary(obj) {
   let text = JSON.stringify(obj);
   if (text.length <= MAX_OUTPUT_CHARS) return text;
-  const keep = ['subcommand', 'run_id', 'ok', 'exit', 'stop', 'detail', 'error', 'code'];
+  // retry: a wake's fresh-wake verdict (wake.cjs) survives the cut; the wrapper reads it from wake-status.json
+  const keep = ['subcommand', 'run_id', 'ok', 'exit', 'stop', 'detail', 'error', 'code', 'retry'];
   const small = {}; for (const k of keep) if (obj[k] !== undefined) small[k] = obj[k];
   small.truncated = true; small.full_chars = text.length;
   text = JSON.stringify(small);
@@ -610,7 +694,9 @@ module.exports = {
   lc, sleep, nowIso, nowIsoSec, sha256, clip, isInside, lastJson,
   loadConfig, holderAddress, loadEthers,
   validateRunId, parseRunRel, readRunFile, existsRunFile, listRunDir, listRunIds, runDirExists, writeRunFile, readProjectFile,
-  TRANSIENT_CODES, RATE_LIMIT_TEXT, DEFAULT_RETRIES, runHelper, runSigner, signerThrottled, stats,
+  TRANSIENT_CODES, RATE_LIMIT_TEXT, DEFAULT_RETRIES, runHelper, runSigner, signerThrottled, signerReverted, stats,
+  SIGNER_RPC_RETRY_MS, signerRpcFailure, signerRetryable, SIM_FLAKY_RETRIES, simFlaky,
+  NONCE_REREAD_MS, nonceFloor, noteNonceFloor, nonceRereads, readNonceAtLeast,
   makeContext, subContext, detailRel, saveDetail, renderSummary, emitSummary, stopJson,
   MODULES, failureSummary, runStep,
 };

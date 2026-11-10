@@ -53,7 +53,7 @@ async function run(ctx) {
   const bal0 = await readBalances(env);
   const held = ASSETS.filter((a) => bal0[a.name] > 0n);
   const base = { susds_before: weiStr(bal0.sUSDS), usdc_raw: bal0.USDC.toString(), usds_raw: bal0.USDS.toString() };
-  if (!held.length) return { ran: false, reason: 'USDC and USDS are both 0: no ramp', ...base, sent: [], artifacts: [] };
+  if (!held.length) return { ran: false, reason: 'USDC and USDS are both 0: no ramp', ...base, sent: [], artifacts: [], nonce_rereads: 0 };
   if (ctx.opts.blockSends) throw stop('sends-blocked', `a PSM3 ramp is due (USDC ${units(bal0.USDC, 6)}, USDS ${weiStr(bal0.USDS)}) and this wake sends nothing: ${ctx.opts.blockSends}; Half A stops before F`, { keep_aborted: true, ...base });
   const gp = X.gateProblems(setup);
   if (gp.length) throw stop('autonomy-gate', `an autonomous send needs the standing authorization (I-setup.md I.2 section 1): ${gp.join('; ')}; nothing was sent`, { gate: gp, ...base });
@@ -77,12 +77,15 @@ async function run(ctx) {
   // 2. the capacity gate (I-setup.md I.1 section 5, step 2: previewSwapExactIn does not check inventory)
   const need = groups.reduce((s, g) => s + g.quote, 0n); const cap0 = await capacity(env);
   if (cap0 < need) throw stop('psm3-capacity', `PSM3 holds ${weiStr(cap0)} sUSDS, below the ${weiStr(need)} the ramp would take out (I-setup.md I.1 section 5, the capacity gate); nothing was sent`, base);
-  // 3. the whole ramp simulated in one request (G section 8, Money rules: the ramp leads the ordered sequence)
-  const nn = await env.H(['nonce', env.holder]);
-  if (nn.latest !== nn.pending) throw stop('pending-transaction', `a transaction of the holder is pending (latest ${nn.latest}, pending ${nn.pending}); nothing of the ramp is sent`, { keep_aborted: true, ...base });
+  // 3. the whole ramp simulated in one request (G section 8, Money rules: the ramp leads the ordered sequence), at the
+  // holder's nonce read through the process floor (a read below what this run proved is a lagging RPC, read again)
+  const nn = await X.readNonce(env, null, 'the PSM3 ramp');
+  if (nn.latest !== nn.pending) throw stop('pending-transaction', `a transaction of the holder is pending (latest ${nn.latest}, pending ${nn.pending}); nothing of the ramp is sent`, { keep_aborted: true, foreign: true, ...base });
   const io = { simulate: async (name, gs) => { ctx.writeRun(name, JSON.stringify(gs)); return env.H(['simulate', ctx.rel(name)]); } };
   const sim = await G.simulatePlan(ctx, io, groups, 0, 'ramp-sim');
   sim.windows.forEach((w) => artifacts.push(w.file));
+  // the batch's own pending read above the one just made: another sender's transaction (G section 8, The nonce floor)
+  for (const w of sim.windows) if (Number.isInteger(w.page.pending_nonce) && w.page.pending_nonce > nn.pending) throw stop('nonce-moved', `${w.file}: the simulation's pending nonce ${w.page.pending_nonce} is above the ${nn.pending} just read: a send happened outside this run; nothing of the ramp is sent`, { keep_aborted: true, foreign: true, ...base });
   const problems = []; for (const w of sim.windows) { const pb = G.pageProblems(w.page, { entries: w.groupIdx.length, count: w.groupIdx.reduce((s, gi) => s + groups[gi].txs.length, 0), pendingNonce: nn.pending }); if (pb.length) problems.push(`${w.file}: ${pb.join('; ')}`); }
   if (problems.length) throw stop('stale-simulation', `the ramp's simulation is not clean: ${clip(problems.join(' | '), 500)}; nothing was sent, Half A stops before F (G section 8, A failing pre-send simulation)`, base);
   let k = 0;
@@ -98,7 +101,8 @@ async function run(ctx) {
   // 5. send, group by group, through exec-core
   const record = { run_id: rid, started_at: lib.nowIso(), holder: env.holder, susds_before: bal0.sUSDS.toString(), usdc_before: bal0.USDC.toString(), usds_before: bal0.USDS.toString(), groups: groups.map((g) => ({ id: g.id, asset: g.asset.name, amount_in: g.amountIn.toString(), quote_susds: g.quote.toString(), min_amount_out: g.minOut.toString(), capacity_at_send: null, txs: [] })), status: 'sending' };
   const saveRecord = () => { ctx.writeRunJson('ramp.json', record, { indent: 1 }); };
-  const sent = [];
+  const sent = []; let cur = null; // the transaction in flight: { g, rg, t }
+  const landedTx = (rg, t, hash, rc) => rg.txs.push({ label: t.label, nonce: t.nonce_expected, tx_hash: hash, block: rc.block_number, gas_used: rc.gas_used, effective_gas_price: rc.effective_gas_price, l1_fee: rc.l1_fee || '0' });
   try {
     for (let gi = 0; gi < groups.length; gi++) {
       const g = groups[gi]; const rg = record.groups[gi];
@@ -108,34 +112,41 @@ async function run(ctx) {
       if (!af.ok) throw stop('affordability-skip', `affordability: ${af.text}; the ramp group ${g.id} is not started, nor anything after it (G section 8, Affordability)`, { eth: af.eth.toString(), need: af.need.toString() });
       const t0 = Date.now();
       for (const t of g.txs) {
+        cur = { g, rg, t };
         if (t.kind === 'swap') { const cap = await capacity(env); rg.capacity_at_send = cap.toString(); if (cap < g.quote) throw stop('psm3-capacity', `${g.id}: PSM3 holds ${weiStr(cap)} sUSDS right before the swap, below the quote ${weiStr(g.quote)} (I-setup.md I.1 section 5)`); }
         const ps = await X.presend(env, book, t, t.nonce_expected);
         const res = await X.broadcast(env, book, t, t.nonce_expected, ps.hash, { source: 'ramp', group: g.id });
-        rg.txs.push({ label: t.label, nonce: t.nonce_expected, tx_hash: res.hash, block: res.receipt.block_number, gas_used: res.receipt.gas_used, effective_gas_price: res.receipt.effective_gas_price, l1_fee: res.receipt.l1_fee || '0' }); saveRecord();
+        landedTx(rg, t, res.hash, res.receipt); saveRecord(); cur = null;
       }
       X.clockAdd(env, Date.now() - t0, g.txs.length);
       sent.push({ id: g.id, txs: rg.txs.map((x) => x.tx_hash) });
     }
   } catch (e) {
     const s = X.asStop(STEP, e);
+    // a ramp transaction that landed although the call stopped (exec-core confirm's e.landed: a nonce read after its
+    // receipt, say; or its settlement below reads Landed) is kept in ramp.json like any landed one
+    const kept = (hash, rc) => { landedTx(cur.rg, cur.t, hash, rc); if (cur.rg.txs.length === cur.g.txs.length) sent.push({ id: cur.g.id, txs: cur.rg.txs.map((x) => x.tx_hash) }); cur = null; };
+    if (cur && e && e.landed && e.landed.hash) kept(e.landed.hash, e.landed.receipt);
     if (env.open) {
       try {
         const st = await X.settleNonce(env, book, env.open.n);
         const keepOpen = st.outcome === 'not-sent' && !env.pin && !st.foreign; // G section 8, Nonce pinning
         if (st.outcome === 'landed' || (st.outcome === 'not-sent' && !keepOpen)) book.settleInflight();
         if (st.outcome === 'pending' || keepOpen) s.fields = { ...s.fields, keep_aborted: true };
+        if (st.outcome === 'landed' && st.receipt && st.receipt.success && cur && cur.t.nonce_expected === env.open.n) kept(st.hash, st.receipt);
+        s.fields = { ...s.fields, settlement: { outcome: st.outcome, via: st.via, hash: st.hash || null, foreign: st.foreign || null, own_cancel: !!st.own_cancel } };
       } catch (x) { s.fields = { ...s.fields, keep_aborted: true }; }
       env.open = null;
     }
     record.status = 'stopped'; record.stop = { kind: s.cause, notes: clip(s.notes, 600) }; record.ended_at = lib.nowIso(); saveRecord();
-    s.fields = { ...s.fields, ...base, sent, record: ctx.rel('ramp.json'), artifacts: [...artifacts, ctx.rel('ramp.json')], notes_for_report: `the PSM3 ramp stopped (${s.cause}); Half A stops before F` };
+    s.fields = { ...s.fields, ...base, sent, record: ctx.rel('ramp.json'), artifacts: [...artifacts, ctx.rel('ramp.json')], notes_for_report: `the PSM3 ramp stopped (${s.cause}); Half A stops before F`, nonce_rereads: env.lagRereads || 0 };
     throw s;
   }
   // 6. sUSDS re-read once the ramp has landed (F reads it fresh again)
   const bal1 = await readBalances(env);
   record.status = 'landed'; record.ended_at = lib.nowIso(); record.susds_after = bal1.sUSDS.toString(); record.susds_delta = (bal1.sUSDS - bal0.sUSDS).toString(); saveRecord();
   artifacts.push(ctx.rel('ramp.json'));
-  return { ran: true, ...base, assets: groups.map((g) => ({ asset: g.asset.name, amount_in: units(g.amountIn, g.asset.decimals), quote_susds: weiStr(g.quote), min_amount_out: weiStr(g.minOut) })), sent, transactions_sent: env.sentThisInvocation, susds_after: weiStr(bal1.sUSDS), susds_delta: weiStr(bal1.sUSDS - bal0.sUSDS), record: ctx.rel('ramp.json'), artifacts };
+  return { ran: true, ...base, assets: groups.map((g) => ({ asset: g.asset.name, amount_in: units(g.amountIn, g.asset.decimals), quote_susds: weiStr(g.quote), min_amount_out: weiStr(g.minOut) })), sent, transactions_sent: env.sentThisInvocation, nonce_rereads: env.lagRereads || 0, susds_after: weiStr(bal1.sUSDS), susds_delta: weiStr(bal1.sUSDS - bal0.sUSDS), record: ctx.rel('ramp.json'), artifacts };
 }
 
 // The ramp's own sends of a run-id, from its record: G refuses a run-id whose sends have started, except a run-id whose

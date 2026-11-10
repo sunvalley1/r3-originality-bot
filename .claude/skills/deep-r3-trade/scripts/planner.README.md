@@ -13,7 +13,8 @@ routine's `node r3.cjs install` lays the copy down from the repository, at the c
 reports whether it matches the setup record's path and hash. `r3.cjs trade` refuses (exit 4) unless the record pins
 exactly this install's planner and signer and the installed `planner.config.json` names that signer and helper, and
 it runs this install's planner, never a path from a record. The agent does not edit it. "The wrapper" below is the scheduled run's driver: `node r3.cjs trade` (`routine.cjs`), which takes
-the arm lock with `owner.txt` stage `claude-p` and runs `wake` once (`steps/I-setup.md` I.2 §7).
+the arm lock with `owner.txt` stage `claude-p` and runs `wake` once, then again on a new run-id after a stop the wake
+marks recoverable while `schedule.fresh_wakes_max` allows, `owner.txt` replaced for each (`steps/I-setup.md` I.2 §6, §7).
 
 | File | What it is |
 |---|---|
@@ -29,7 +30,7 @@ the arm lock with `owner.txt` stage `claude-p` and runs `wake` once (`steps/I-se
 | `planner/halfb.cjs` | `halfb`: Half B (merges and redeems at every level) |
 | `planner/h.cjs` | `h`: H-no-learn |
 | `planner/report.cjs` | `report`: `report.md` (and `wake-status.json` inside a wake) |
-| `planner/wake.cjs` | `wake`: the whole scheduled run in one call |
+| `planner/wake.cjs` | `wake`: one wake of the scheduled run (the first, or a fresh wake), in one call |
 | `planner/ramp.cjs` | the wake's PSM3 ramp of any USDC and USDS, between `e` and `f` (not a subcommand of its own) |
 | `planner.config.example.json` | the config template (refused until its placeholders are replaced) |
 | `planner.test.cjs` | offline tests on a synthetic chain, and an optional live read-only smoke (section 7) |
@@ -231,7 +232,17 @@ skipped). A mint group's boundary is a flip of its own level since G's reading; 
 transaction: the fresh checks (boundary, route, floors; a merge-arb's child Invalid at least its `q`), then
 the nonce (latest == pending == the plan's), the signer-input file equal to the plan and its keccak256 equal to the
 plan's, the signer's own `simulate`, the three-part gas check, the lock still ours, the write-ahead, ONE `send`, the
-receipt and the nonce n + 1. Per group: affordability first; the balance effects against the plan's after it: exact on
+receipt and the nonce n + 1. Reads in place, never a second send (G section 8, *The nonce floor* and step 4): a nonce
+read below what the process proved (`n` before a send, n + 1 after its receipt) is read again up to 8 times over about
+30 s, then `nonce-lag` (exit 5); a value at or above it that is not the expected one is another sender's (exit 4,
+`fields.foreign`); the signer's `simulate` that fails (status, gas check, a pending nonce below n) is asked again after
+4 s and 8 s, and one that reports a pending nonce above n is another sender's at once, whatever its status; a receipt the signer printed `confirmed` is read again up to 5 times, 2 s apart; a Pending that is only "not
+yet" is settled again for up to 5 minutes; a confirmed nonce below n is `chain-mismatch` only after five reads over about
+60 s and no receipt of a recorded hash; a `send` the signer answered with an RPC failure before signing (no `broadcast`
+line) is retired and re-entered through the pre-send check (the nonce and its floor, the input file and its hash, the
+signer's `simulate`, the gas check; not the boundary, route and floor checks before it) after 5, 15 and 30 s
+(`fields.transient` once exhausted); a send still throttled after the runner's re-runs is not re-entered (`transient`
+and `throttled`). The summary's `nonce_rereads` counts the nonce re-reads (also in `halfb`'s and the ramp's). Per group: affordability first; the balance effects against the plan's after it: exact on
 every delta no pool decides (`effects-mismatch` otherwise), reported as "pool moved since build" (`exec-state.json`
 `effects_diffs`, `report.md`) on a swap's output or an exact-output swap's input that a third party's trade moved after
 the build, held only to the calldata's own bound. A landed merge-arb writes the side `Invalid` rows of the child Invalid
@@ -251,17 +262,17 @@ affordability, runs the full pre-send path on the next transaction without its s
 recorded (`exec-check.json`).
 
 ```json
-{"subcommand":"exec","run_id":"<run-id>","ok":true,"exit":0,"stop":null,"outcome":"check-passed","check":{"data_files":{"checked":28,"bad":0},"boundary":{"groups":9,"not_clear":0},"quotes":{"checked":7,"outside_bound":0,"differ_from_plan_quote":0},"simulation":{"clean":true,"requests":1,"windowed":false,"problems":[]},"sale_proceeds":{"checked":1,"differ":0,"problems":[]},"sim_rows_vs_plan":{"checked":28,"differ":0,"note":"a difference in gasUsed or gas_limit is reported; the pre-send gas check judges each transaction at its send"},"rebuild":{"groups":1,"differ":0},"affordability":{"gas_price":"1000000","first_group_not_affordable":null,"projected_end_eth":"0.009983067421972"},"first_tx":{"idx":0,"fresh_gas_used":"46000","plan_gas_used":46000,"gas_limit":"55200","notes":[]},"settlement":{"checked":0,"not_landed":0},"problems":0,"seconds":24},"check_file":"run/<run-id>/exec-check.json","mode":"check","groups_total":9,"groups_done":0,"transactions_total":28,"transactions_sent":0,"sent_this_invocation":0,"first_tx":null,"last_tx":null,"gas_cost_eth_receipts":"0","nonce_pinning":false,"signer_env_dropped":[],"signer_log_path":null,"tx_hash_file":"run/<run-id>/exec-sends.json","detail":"run/<run-id>/planner/exec.json"}
+{"subcommand":"exec","run_id":"<run-id>","ok":true,"exit":0,"stop":null,"outcome":"check-passed","check":{"data_files":{"checked":28,"bad":0},"boundary":{"groups":9,"not_clear":0},"quotes":{"checked":7,"outside_bound":0,"differ_from_plan_quote":0},"simulation":{"clean":true,"requests":1,"windowed":false,"problems":[]},"sale_proceeds":{"checked":1,"differ":0,"problems":[]},"sim_rows_vs_plan":{"checked":28,"differ":0,"note":"a difference in gasUsed or gas_limit is reported; the pre-send gas check judges each transaction at its send"},"rebuild":{"groups":1,"differ":0},"affordability":{"gas_price":"1000000","first_group_not_affordable":null,"projected_end_eth":"0.009983067421972"},"first_tx":{"idx":0,"fresh_gas_used":"46000","plan_gas_used":46000,"gas_limit":"55200","notes":[]},"settlement":{"checked":0,"not_landed":0},"problems":0,"seconds":24},"check_file":"run/<run-id>/exec-check.json","mode":"check","groups_total":9,"groups_done":0,"transactions_total":28,"transactions_sent":0,"sent_this_invocation":0,"first_tx":null,"last_tx":null,"gas_cost_eth_receipts":"0","nonce_pinning":false,"signer_env_dropped":[],"signer_log_path":null,"nonce_rereads":0,"tx_hash_file":"run/<run-id>/exec-sends.json","detail":"run/<run-id>/planner/exec.json"}
 ```
 
 ```json
-{"subcommand":"exec","run_id":"<run-id>","ok":true,"exit":0,"stop":null,"outcome":"complete","mode":"supervised","groups_total":9,"groups_done":9,"transactions_total":28,"transactions_sent":28,"sent_this_invocation":28,"first_tx":"0xf010d7130f7f8740b9b7eda0477ce178a5e517fed4408cad42b6ad97b02ff484","last_tx":"0x02ed6a8cf08c1c6e1e33ba9bb3b6c2fe2cd50d887e795e2ad72728be08287845","gas_cost_eth_receipts":"0.000016932578028","nonce_pinning":false,"signer_env_dropped":[],"signer_log_path":"<the signer's log>","tx_hash_file":"run/<run-id>/exec-sends.json","retained_legs":102,"consumed_rows":0,"unattributed_consumption":[],"notes":[],"eth_after":"0.009983067421972","detail":"run/<run-id>/planner/exec.json"}
+{"subcommand":"exec","run_id":"<run-id>","ok":true,"exit":0,"stop":null,"outcome":"complete","mode":"supervised","groups_total":9,"groups_done":9,"transactions_total":28,"transactions_sent":28,"sent_this_invocation":28,"first_tx":"0xf010d7130f7f8740b9b7eda0477ce178a5e517fed4408cad42b6ad97b02ff484","last_tx":"0x02ed6a8cf08c1c6e1e33ba9bb3b6c2fe2cd50d887e795e2ad72728be08287845","gas_cost_eth_receipts":"0.000016932578028","nonce_pinning":false,"signer_env_dropped":[],"signer_log_path":"<the signer's log>","nonce_rereads":0,"tx_hash_file":"run/<run-id>/exec-sends.json","retained_legs":102,"consumed_rows":0,"unattributed_consumption":[],"notes":[],"eth_after":"0.009983067421972","detail":"run/<run-id>/planner/exec.json"}
 ```
 
 A stop (here the pre-send gas check on the first approve, before any send):
 
 ```json
-{"subcommand":"exec","run_id":"<run-id>","exit":3,"ok":false,"stop":{"step":"G","cause":"gas-limit","status":"aborted","notes":"approve sUSDS -> Router (M) (nonce 5): pre-send gas check (a) failed: the fresh gas_used 52900 x 1.2 is above the plan's gas_limit 55200 (a limit is never raised at send time)"},"mode":"supervised","groups_total":9,"groups_done":0,"transactions_total":28,"transactions_sent":0,"sent_this_invocation":0,"first_tx":null,"last_tx":null,"gas_cost_eth_receipts":"0","nonce_pinning":false,"signer_env_dropped":[],"signer_log_path":null,"tx_hash_file":"run/<run-id>/exec-sends.json","retained_legs":0,"consumed_rows":0,"unattributed_consumption":[],"half_done":null,"recovery":null,"skipped_groups":["mint-middle-A","mint-middle-B","mint-middle-C","set-sell:ethereum/py_ecc","dual-buy:blockscout/blockscout","simple-buy:LFDT-web3j/web3j:UP","complex-buy:Cyfrin/aderyn:UP","simple-buy:argotorg/sourcify:DOWN"],"skipped_count":8,"eth_after":"0.01","detail":"run/<run-id>/planner/exec.json"}
+{"subcommand":"exec","run_id":"<run-id>","exit":3,"ok":false,"stop":{"step":"G","cause":"gas-limit","status":"aborted","notes":"approve sUSDS -> Router (M) (nonce 5): pre-send gas check (a) failed: the fresh gas_used 52900 x 1.2 is above the plan's gas_limit 55200 (a limit is never raised at send time)"},"mode":"supervised","groups_total":9,"groups_done":0,"transactions_total":28,"transactions_sent":0,"sent_this_invocation":0,"first_tx":null,"last_tx":null,"gas_cost_eth_receipts":"0","nonce_pinning":false,"signer_env_dropped":[],"signer_log_path":null,"nonce_rereads":0,"tx_hash_file":"run/<run-id>/exec-sends.json","retained_legs":0,"consumed_rows":0,"unattributed_consumption":[],"half_done":null,"recovery":null,"skipped_groups":["mint-middle-A","mint-middle-B","mint-middle-C","set-sell:ethereum/py_ecc","dual-buy:blockscout/blockscout","simple-buy:LFDT-web3j/web3j:UP","complex-buy:Cyfrin/aderyn:UP","simple-buy:argotorg/sourcify:DOWN"],"skipped_count":8,"eth_after":"0.01","detail":"run/<run-id>/planner/exec.json"}
 ```
 
 A safety refusal (exit 4) writes nothing and sends nothing:
@@ -288,11 +299,11 @@ affordability, the time budget or a failed or refused simulation exits 3 (`affor
 `wake-status.json`).
 
 ```json
-{"subcommand":"halfb","run_id":"<run-id>","ok":true,"exit":0,"stop":null,"mode":"supervised-print","run_ids_holding_fills":1,"processed":["<run-id>"],"skipped_live":[],"not_final":[],"record_run":"<run-id>","held_children":5,"settled_children":[],"middles_resolved":[],"parent_resolved":false,"answer_watch":{"compared_with":null,"new_answers":[],"questions":11,"read_at_block":1028,"timestamp":1791250056},"decided_but_unreported":[],"resize_schedule":null,"merge_bounds_at_read":{"z_A":{"z":"0","scarcest":"LFDT-web3j/web3j","zero_balances":1},"z_B":{"z":"0","scarcest":"Cyfrin/aderyn","zero_balances":1},"z_C":{"z":"2.9214677588927","scarcest":"argotorg/sourcify","zero_balances":0},"y":{"y":"0","scarcest":"bundle A"}},"actionable":[{"level":2,"groups":[{"id":"middle-merge:C","kind":"middle-merge","book":"<run-id>","txs":34,"amount":"2921467758892700000"}],"simulation_clean":true,"problems":[]}],"sent":[],"skipped":[],"half_done":[],"notes":[],"artifacts":["run/<run-id>/halfb-sim-l2-main.json","run/<run-id>/halfb-plan.json","run/<run-id>/halfb-print.md","run/<run-id>/halfb-tx/ (34 files)"],"sends_this_invocation":0,"keep_aborted":false,"budget_exhausted":false,"detail":"run/<run-id>/planner/halfb.json"}
+{"subcommand":"halfb","run_id":"<run-id>","ok":true,"exit":0,"stop":null,"mode":"supervised-print","run_ids_holding_fills":1,"processed":["<run-id>"],"skipped_live":[],"not_final":[],"record_run":"<run-id>","held_children":5,"settled_children":[],"middles_resolved":[],"parent_resolved":false,"answer_watch":{"compared_with":null,"new_answers":[],"questions":11,"read_at_block":1028,"timestamp":1791250056},"decided_but_unreported":[],"resize_schedule":null,"merge_bounds_at_read":{"z_A":{"z":"0","scarcest":"LFDT-web3j/web3j","zero_balances":1},"z_B":{"z":"0","scarcest":"Cyfrin/aderyn","zero_balances":1},"z_C":{"z":"2.9214677588927","scarcest":"argotorg/sourcify","zero_balances":0},"y":{"y":"0","scarcest":"bundle A"}},"actionable":[{"level":2,"groups":[{"id":"middle-merge:C","kind":"middle-merge","book":"<run-id>","txs":34,"amount":"2921467758892700000"}],"simulation_clean":true,"problems":[]}],"sent":[],"skipped":[],"half_done":[],"notes":[],"artifacts":["run/<run-id>/halfb-sim-l2-main.json","run/<run-id>/halfb-plan.json","run/<run-id>/halfb-print.md","run/<run-id>/halfb-tx/ (34 files)"],"sends_this_invocation":0,"keep_aborted":false,"budget_exhausted":false,"nonce_rereads":0,"detail":"run/<run-id>/planner/halfb.json"}
 ```
 
 ```json
-{"subcommand":"halfb","run_id":"<run-id>","ok":true,"exit":0,"stop":null,"mode":"supervised-send","run_ids_holding_fills":1,"processed":["<run-id>"],"skipped_live":[],"not_final":[],"record_run":"<run-id>","held_children":5,"settled_children":["LFDT-web3j/web3j"],"middles_resolved":[],"parent_resolved":false,"answer_watch":{"compared_with":null,"new_answers":[],"questions":11,"read_at_block":1028,"timestamp":1791250056},"decided_but_unreported":[],"resize_schedule":null,"merge_bounds_at_read":{"z_A":{"z":"0","scarcest":"LFDT-web3j/web3j","zero_balances":1},"z_B":{"z":"0","scarcest":"Cyfrin/aderyn","zero_balances":1},"z_C":{"z":"2.9214677588927","scarcest":"argotorg/sourcify","zero_balances":0},"y":{"y":"0","scarcest":"bundle A"}},"actionable":[{"level":1,"groups":[{"id":"child-redeem:LFDT-web3j/web3j","kind":"child-redeem","book":"<run-id>","txs":2,"amount":null}],"simulation_clean":true,"problems":[]}],"sent":[{"id":"child-redeem:LFDT-web3j/web3j","book":"<run-id>","txs":["0x309c7f72864e9d47e0995455d77de26d8147c6fba3ea82615446cdb89e32e0ea","0xdf60efab9cc083e2f6ff6ffd4c5696b8c24a6ae12ab47c292aa7120358f29ae5"]}],"skipped":[],"half_done":[],"notes":[],"artifacts":["run/<run-id>/halfb-sim-l1-main.json","run/<run-id>/halfb-tx/ (2 files)"],"sends_this_invocation":2,"keep_aborted":false,"budget_exhausted":false,"detail":"run/<run-id>/planner/halfb.json"}
+{"subcommand":"halfb","run_id":"<run-id>","ok":true,"exit":0,"stop":null,"mode":"supervised-send","run_ids_holding_fills":1,"processed":["<run-id>"],"skipped_live":[],"not_final":[],"record_run":"<run-id>","held_children":5,"settled_children":["LFDT-web3j/web3j"],"middles_resolved":[],"parent_resolved":false,"answer_watch":{"compared_with":null,"new_answers":[],"questions":11,"read_at_block":1028,"timestamp":1791250056},"decided_but_unreported":[],"resize_schedule":null,"merge_bounds_at_read":{"z_A":{"z":"0","scarcest":"LFDT-web3j/web3j","zero_balances":1},"z_B":{"z":"0","scarcest":"Cyfrin/aderyn","zero_balances":1},"z_C":{"z":"2.9214677588927","scarcest":"argotorg/sourcify","zero_balances":0},"y":{"y":"0","scarcest":"bundle A"}},"actionable":[{"level":1,"groups":[{"id":"child-redeem:LFDT-web3j/web3j","kind":"child-redeem","book":"<run-id>","txs":2,"amount":null}],"simulation_clean":true,"problems":[]}],"sent":[{"id":"child-redeem:LFDT-web3j/web3j","book":"<run-id>","txs":["0x309c7f72864e9d47e0995455d77de26d8147c6fba3ea82615446cdb89e32e0ea","0xdf60efab9cc083e2f6ff6ffd4c5696b8c24a6ae12ab47c292aa7120358f29ae5"]}],"skipped":[],"half_done":[],"notes":[],"artifacts":["run/<run-id>/halfb-sim-l1-main.json","run/<run-id>/halfb-tx/ (2 files)"],"sends_this_invocation":2,"keep_aborted":false,"budget_exhausted":false,"nonce_rereads":0,"detail":"run/<run-id>/planner/halfb.json"}
 ```
 
 ### `h <run-id>`: H-no-learn
@@ -318,7 +329,7 @@ changes (`result: "unchanged"` otherwise).
 {"subcommand":"report","run_id":"<run-id>","ok":true,"exit":0,"stop":null,"report":"run/<run-id>/report.md","lines":67,"wake_status":null,"detail":"run/<run-id>/planner/report.json"}
 ```
 
-### `wake <run-id>`: the whole scheduled run
+### `wake <run-id>`: one wake of the scheduled run
 
 Only inside the wrapper: `./run/.lock.deep-r3-trade` held by the wrapper (`owner.txt` stage `claude-p`) naming this
 run-id (else `not-scheduled`, exit 4, nothing written). It writes `wake-status.json` `aborted` first; checks the four
@@ -359,14 +370,32 @@ Half B group it left part-way is named in `notes` and `report.md`. An `exec` tha
 (its `half_done`: nonce settled, and the recovery rule it applied in the same run did not complete or unwind the group)
 makes the final status `aborted`, cause `half-done`, exit 3 (at least), the group named at the top of `notes` and
 `report.md`: the run-id is not final, and the next wake's repair applies the rule again. Every step leaves the same
-summary and detail file as when it runs alone (the ramp's is `planner/ramp.json`).
+summary and detail file as when it runs alone (the ramp's is `planner/ramp.json`). A G build stop that finds the plan
+stale before the first broadcast (`stale-quote`, `stale-susds`, `stale-invalid`, `probe-failed`, `over-budget`,
+`pool-unusable`) takes the same once-only re-plan; `boundary` does not. A Pending nonce of an earlier run-id that is only
+"not yet" is settled again every 15 s for up to 3 minutes before it blocks the wake's sends. `notes` names the nonce
+reads repeated after a lagging RPC answer ("nonce re-read k time(s) ...").
+
+**`retry`, the fresh-wake verdict** (`I-setup.md` I.2 section 6, *A fresh wake in the same run*), in the summary and in
+the final `wake-status.json` (it survives the 20,000-character cut): `{verdict, class, key, after_s, why}` and, for
+class `foreign`, `quiet_s`. `verdict` is `fresh-wake` or `none`; `class` is `transport` (`after_s` 600), `market` (180),
+`settle` (900), `foreign` (300, `quiet_s` 300: another sender used the wallet; the wrapper waits until the holder's
+nonce reads `latest == pending`, unchanged for `quiet_s`; a verdict of another class turned foreign keeps its longer
+wait) or `stop` (with `none`, `after_s` null); `key` is `<step>:<cause>` or `repair:<kind>`. Deny by default:
+`wake.cjs` `retryVerdict` (no CSV to trade on, `no-csv` or `csv-store-mismatch`; a safety cause anywhere, an open nonce settled `chain-mismatch` after another
+stop included; what blocked the repair; Half A's cause; G's cut; another sender met by a recovery or by Half B while it
+could send). The wake exits with its worst stop's exit, so beside a stop of exit 4 a `transport` or `market` verdict
+becomes `settle` when that stop is a Pending or a pending or moved nonce, and `none` otherwise (`r3.cjs` retries an
+exit 4 only for `settle` or `foreign`). A
+gate refusal carries `{verdict:"none", class:"stop", key:"W:gate"}`. `r3.cjs` reads it and decides whether there is
+room for another wake.
 
 ```json
-{"subcommand":"wake","run_id":"<run-id>","ok":true,"exit":0,"stop":null,"status":"traded","stopped_at_step":"H","half_a_stop":null,"traded":true,"repaired":0,"recovered":[],"sends_blocked":null,"h_rescored":[],"h_results":{"<run-id>":"nothing settled yet"},"notes":[],"report":"run/<run-id>/report.md","wake_status":"run/<run-id>/wake-status.json","detail":"run/<run-id>/planner/wake.json"}
+{"subcommand":"wake","run_id":"<run-id>","ok":true,"exit":0,"stop":null,"status":"traded","stopped_at_step":"H","half_a_stop":null,"traded":true,"repaired":0,"recovered":[],"sends_blocked":null,"h_rescored":[],"h_results":{"<run-id>":"nothing settled yet"},"notes":[],"retry":{"verdict":"none","class":"stop","key":null,"after_s":null,"why":"the wake ran its plan: nothing to retry"},"report":"run/<run-id>/report.md","wake_status":"run/<run-id>/wake-status.json","detail":"run/<run-id>/planner/wake.json"}
 ```
 
 ```json
-{"subcommand":"wake","run_id":"<run-id>","exit":3,"ok":false,"stop":{"step":"W","cause":"gate","status":"aborted","notes":"autonomy.enabled is not true"},"status":"aborted","detail":"run/<run-id>/planner/wake.json"}
+{"subcommand":"wake","run_id":"<run-id>","exit":3,"ok":false,"stop":{"step":"W","cause":"gate","status":"aborted","notes":"autonomy.enabled is not true"},"status":"aborted","retry":{"verdict":"none","class":"stop","key":"W:gate","after_s":null,"why":"W:gate: refused at the start check, the operator's standing authorization (I-setup.md I.2 section 1): never retried in the run"},"detail":"run/<run-id>/planner/wake.json"}
 ```
 
 ## 5. Exit codes
@@ -378,7 +407,7 @@ summary and detail file as when it runs alone (the ramp's is `planner/ramp.json`
 | 2 | usage or config, or a tool that refused its own config, arguments or paths | `usage`, `bad_run_id`, `bad_argument`, `config_missing`, `config_malformed`, `config_inside_project`, `config_cwd_mismatch`, `ethers_missing`, `ethers_version`, `path_*` |
 | 3 | a stop the skill defines: a C or D stop, a stale plan, a refusal, an affordability skip | `tool-failure`, `signer-refused`, `identity-check-failed`, `upstream-set-changed`, `onchain-reads-failed`, `run-id-used`, `no-csv`, `csv-store-mismatch`, `awaiting-continue`, `price-seen`, `self-check-failed`, `broadcast-started`, `allowlist-refused`, `boundary`, `stale-boundary`, `simulation-failed`, `stale-simulation`, `dual-leg-infeasible`, `merge-arb-infeasible`, `stale-invalid`, `stale-susds`, `stale-floor`, `stale-balance`, `effects-mismatch`, `gas-limit`, `gas-grew`, `affordability-skip`, `time-budget`, `psm3-capacity`, `autonomy-gate`, `prior-stop`, `changed-since-print`, `unsupported-signer-mode` (signer mode (b), refused by every send path and by the wake: section 8); the wake's `half-a-stop`, `half-done`, `half-b-stop`, `aborted` |
 | 4 | a safety refusal | `nonce-moved`, `pending-transaction`, `hash-mismatch`, `lock-held`, `lock-lost`, `pending`, `inflight-unsettled`, `signer-changed`, `holder-mismatch`, `not-scheduled` |
-| 5 | a transport failure after the re-runs | `rpc_unreachable` (C), `transport` |
+| 5 | a transport failure after the re-runs | `rpc_unreachable` (C), `transport`, `nonce-lag` (the holder nonce still read below what the run proved after 8 re-reads) |
 
 ## 6. The live-chain rules it keeps
 
@@ -399,7 +428,8 @@ All proven or fixed on the first live run; the canonical text is `steps/G-mint-a
   entry points a scheduled run also starts (G section 8 *Nonce pinning*): a throttled `clear-nonce` is re-run like a
   `send` and is never timed out, a throttled `reconcile` like a `simulate`. A `simulate` still throttled
   after the re-runs stops with exit 5 `transport` (never `stale-simulation`); a `send` still throttled is retired as
-  not broadcast and ends its group like a refusal before any broadcast. Only a `"simulated":true` answer is a
+  not broadcast and ends its group like a refusal before any broadcast, never re-entered (its stop, exit 3, carries
+  `transient` and `throttled`: a fresh wake of class `transport` may follow). Only a `"simulated":true` answer is a
   simulation result, so the pre-send `simulate` (`exec-core.presend`, on every send path) stops with `stale-simulation`
   only on such an answer with a status other than `0x1`: an RPC failure with no `"simulated":true` or the planner's
   own timeout is exit 5 `transport`, a `-38000` to `-38999` refusal `tool-failure`, a refusal `signer-refused`, any
@@ -487,33 +517,46 @@ in process (a cancel at `from_block` + 40,000 found across five settlements of a
 once, none skipped, `nonce-attempts.json` unchanged), H's cost basis in process (the first live run's complex-buy rows:
 `x` counted once, the hand-computed P&L for UP, DOWN and INVALID), this arm's `method` recognition
 (`lib.isArmForecastMethod`: `csv-face-value` and the older marks of earlier run-ids; any other method is another
-arm's)), `pipeline` (c, d, e, f, g, `exec --check`, exec, halfb, h,
+arm's), the nonce floor (a read below it read again, one at or above it judged at once, the lag outlasting the 8
+re-reads to `nonce-lag`; in G's `checkNonce` too), the signer's read-only RPC failure re-run 2, 5 and 10 s apart (P6),
+the helper's `simulate_failed` outside `-38xxx` re-run twice (P8b), the settlement's receipt read before a
+chain-mismatch and its five reads over about 60 s (P4), a Pending that is only "not yet" settled again (P3), and the
+fresh-wake verdict surviving the 20,000-character cut), `pipeline` (c, d, e, f, g, `exec --check`, exec, halfb, h,
 report on one run-id, each summary's shape, writes only where allowed), `c-variants` (C's stops and its onchain
 rebuild, a transport failure to exit 5), `g-safety` and `exec-safety` (nonce moved, pending transaction, hash
 mismatch, a refused check, the gas check at send time, affordability, `--max-groups`, a send throttled before signing
 re-run with one attempt per nonce, a pre-send `simulate` still throttled after its re-runs to exit 5, its
 `rpc-transport`, `rpc-http` 503 and plain `rpc-error` answers to exit 5 and a `-38xxx` one to exit 3, nothing sent;
-signer mode (b): `exec`, `exec --check` and `halfb --send` refused before any signer call), `wake` (the whole
+signer mode (b): `exec`, `exec --check` and `halfb --send` refused before any signer call; G's build simulation reporting
+a pending nonce above the plan's (`nonce-moved`, foreign) or below it (`nonce-lag`, exit 5); in process, the nonce
+floor at confirm and at the pre-send check with 30 Oct's answers, the pre-send `simulate` asked again (P7; a pending
+nonce above n, whatever the status, judged at once as another sender's), a send's RPC failure before signing re-entered
+through the pre-send check and exhausted (P5; never after a broadcast line, a refusal, a revert text or a throttle that
+outlasted the runner's re-runs), and a `confirmed` receipt read again (P2)), `wake` (the whole
 scheduled run inside a wrapper lock, the gates, a signer-mode (b) setup refused at the start check, the refusal
 outside the wrapper, D4, the four gates, a Half B affordability skip, exec's and Half B's pre-send `simulate`
 answering an RPC failure (exit 5, nothing sent, the wake `aborted`), the once-only re-plan and the cut, a group exec
 leaves half-done after its in-run recovery stopped ending the wake `aborted` (cause
 `half-done`), the next wake's repair applying the rule to it on the state of the day (Half B's middle merge had taken
-the market's repo tokens back, so the stray leg is sold: unwound, its rows appended, the run-id finalized), and a
-recovered group never acted on again), `repair` (in process: an unsettled Half B write-ahead in a prior final run-id,
+the market's repo tokens back, so the stray leg is sold: unwound, its rows appended, the run-id finalized), a
+recovered group never acted on again, the fresh-wake verdict row by row, a nonce lag absorbed in place, 30 Oct's lag
+replayed (exec stops `nonce-lag`, and the fresh wake's repair completes the group), another sender after the run's
+first send (class `foreign`), and the lag after Half B's last transaction landed (its rows kept)), `repair` (in process: an unsettled Half B write-ahead in a prior final run-id,
 a not-sent finding on a signer that cannot pin the nonce over two wakes, a scheduled run's own cancel of it (mined,
 refused, beaten by the old transaction, too close to the deadline; in the run and at the next start-of-run repair) and
-a send-lock its reconcile keeps, a ramp-stopped run-id; the missing `fills.json`
+a send-lock its reconcile keeps, a ramp-stopped run-id, a Pending settled again every 15 s for up to 3 minutes; the missing `fills.json`
 row appended once, every row kept, for a dual-buy leg, a Half B merge and a Half B child redeem that landed after their
 run stopped; a late approve that makes a skipped group half-done), `boundary` (a resolved middle: the plan, the sends, a
 flip between G and exec, an `M = 0` plan), `mergearb` (F's merge-arb, G's buy-and-merge group, exec and the cross-run
-Invalid row), `ramp` (the wake's PSM3 ramp, its capacity stop, `f --provisional`, its pre-send `simulate` answering
-`rpc-transport`), `recovery` (exec's recovery rule in the same run: a dual-buy completed after its DOWN leg's
-simulate failed once, unwound by selling the stray UP leg after a third party lifted the DOWN price, kept when the
+Invalid row), `ramp` (the wake's PSM3 ramp, its capacity stop, its simulation reporting a pending nonce above the one just read
+(another sender), `f --provisional`, its pre-send `simulate` answering `rpc-transport`), `recovery` (exec's recovery
+rule in the same run: a dual-buy completed after its DOWN leg's simulate failed three times in a row, the first answer
+and presend's two re-asks (one failure, asked again and sent, is also tested), unwound by selling the stray UP leg after a third party lifted the DOWN price, kept when the
 child went to arbitration and then finalized by the next wake's repair), `cap` (a 51-complex-buy plan: `exec --check`
 passes with its 51 sale proceeds read at most 20 flagged calls per request, and `exec` inside the wrapper sends all 306
 transactions; across the whole suite no simulate request flags more than 20 calls); `exec-safety` also moves a pool
-after G (reported, never a stop). It takes about 50 minutes (every helper and signer call is a process).
+after G (reported, never a stop). It takes about 40 minutes run as two halves side by side, up to about 3 hours on a
+slower machine (every helper and signer call is a process; `cap` is the longest).
 
 **Live read-only smoke** (optional, after installing): it installs its own copy of the planner in `--bin`, outside
 `--project`, copies `ethers` next to it from the helper's folder, copies a CSV store into `--project/run/csv`, then runs

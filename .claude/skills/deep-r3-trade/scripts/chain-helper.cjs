@@ -413,13 +413,20 @@ async function postJson(cfg, payload, maxBytes) {
       lastErr = new HelperError('rpc_unreachable', `RPC request failed: ${clip(e && e.cause && e.cause.message ? e.cause.message : e.message, 120)}`, EXIT.NET);
       continue;
     }
-    if (res.status === 429 || res.status === 502 || res.status === 503 || res.status === 504) {
+    if (res.status === 429 || res.status === 500 || res.status === 502 || res.status === 503 || res.status === 504) {
       retryAfter = res.headers.get('retry-after');
       try { await res.body.cancel(); } catch { /* ignore */ }
       lastErr = new HelperError('rpc_rate_limited', `RPC answered HTTP ${res.status} after ${attempt + 1} attempt(s)`, EXIT.NET, { http_status: res.status });
       continue;
     }
-    const text = (await readCapped(res, maxBytes)).toString('utf8');
+    // a body that stalls or is cut mid-way (a reset socket, the request timeout) is a transport failure like a refused
+    // connection: tried again; an over-cap body (response_too_large) is the answer itself and is not
+    let text;
+    try { text = (await readCapped(res, maxBytes)).toString('utf8'); } catch (e) {
+      if (e instanceof HelperError) throw e;
+      lastErr = new HelperError('rpc_unreachable', `RPC response body could not be read: ${clip(e && e.cause && e.cause.message ? e.cause.message : e && e.message, 120)}`, EXIT.NET);
+      continue;
+    }
     if (!res.ok) {
       throw new HelperError('rpc_http', `RPC answered HTTP ${res.status}: ${clip(text, 200)}`, EXIT.NET, { http_status: res.status });
     }
@@ -1311,7 +1318,13 @@ async function fetchData(cfg) {
       lastErr = new HelperError('data_rate_limited', `data function answered HTTP 429 after ${attempt + 1} attempt(s)`, EXIT.NET);
       continue;
     }
-    const buf = await readCapped(res, MAX_DATA_BYTES);
+    // a body that breaks off or stalls past the timeout is tried again like a 429, then data_unreachable (exit 5)
+    let buf;
+    try { buf = await readCapped(res, MAX_DATA_BYTES); } catch (e) {
+      if (e instanceof HelperError) throw e;
+      lastErr = new HelperError('data_unreachable', `the data function's response body could not be read: ${clip(e && e.cause && e.cause.message ? e.cause.message : e && e.message, 120)}`, EXIT.NET);
+      continue;
+    }
     return { status: res.status, contentType: res.headers.get('content-type'), buf };
   }
   throw lastErr;

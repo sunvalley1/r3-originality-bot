@@ -2,8 +2,9 @@
 // section 4): what was sent (tx hashes), what was skipped and why, balances before and after, Half B, the answer watch,
 // the markets decided but unreported, and the P&L so far from H, one line per run-id of this arm ("<run-id>: nothing
 // settled yet" when H ran on it and found nothing settled, I.2 section 4). Inside a wake (opts.wake, never from the
-// command line) it also writes the final wake-status.json; run alone it writes report.md only and never touches a
-// wake-status.json. Reads files only; no chain read, no send.
+// command line) it also writes the final wake-status.json, its `retry` the wake's fresh-wake verdict (wake.cjs
+// retryVerdict); run alone it writes report.md only and never touches a wake-status.json. Reads files only; no chain
+// read, no send.
 'use strict';
 
 const lib = require('./lib.cjs');
@@ -136,7 +137,7 @@ async function run(ctx) {
   ctx.writeRun('report.md', L.join('\n') + '\n');
   let ws = null;
   if (W && W.final) {
-    ws = { run_id: rid, started_at: W.started_at, finished_at: lib.nowIso(), status: W.status, stopped_at_step: W.stopped_at_step || 'H', cadence_hours: W.cadence_hours === undefined ? null : W.cadence_hours, bankroll: f && f.bankroll !== undefined ? f.bankroll : null, positions_sent: F ? F.runs.filter((r) => r.tx_hash && ['filled', 'partial'].includes(r.status) && !['mint', 'consumed'].includes(r.side) && !['buy-and-merge', 'redeem'].includes(r.route)).length : 0, h_rescored: W.h_rescored || [], csv: d && d.csv ? { version: d.csv.version, path: d.csv.path, sha256: d.csv.sha256, supplied_at: d.csv.supplied_at, reused: d.csv.reused, counts: d.csv.counts } : null, notes: (W.notes || []).join(' | ') };
+    ws = { run_id: rid, started_at: W.started_at, finished_at: lib.nowIso(), status: W.status, stopped_at_step: W.stopped_at_step || 'H', cadence_hours: W.cadence_hours === undefined ? null : W.cadence_hours, bankroll: f && f.bankroll !== undefined ? f.bankroll : null, positions_sent: F ? F.runs.filter((r) => r.tx_hash && ['filled', 'partial'].includes(r.status) && !['mint', 'consumed'].includes(r.side) && !['buy-and-merge', 'redeem'].includes(r.route)).length : 0, h_rescored: W.h_rescored || [], csv: d && d.csv ? { version: d.csv.version, path: d.csv.path, sha256: d.csv.sha256, supplied_at: d.csv.supplied_at, reused: d.csv.reused, counts: d.csv.counts } : null, notes: (W.notes || []).join(' | '), retry: W.retry || null };
     ctx.writeRunJson('wake-status.json', ws);
   }
   return { report: ctx.rel('report.md'), lines: L.length, wake_status: ws ? { path: ctx.rel('wake-status.json'), status: ws.status } : null };

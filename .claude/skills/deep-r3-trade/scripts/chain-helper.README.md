@@ -71,9 +71,10 @@ Record the helper's sha256 as `chain_helper.sha256` in `setup.deep-r3-trade.json
 | `retryBaseDelayMs` | no | first back-off delay, 0 to 10000, default 1000 (doubles per attempt, capped at 8 s; a `Retry-After` header is honoured up to 8 s) |
 | `simulationOverrides` | no | config-only fake state for `simulate`, for tests and dry runs (below). Never settable from `argv` |
 
-Any other key is an error. HTTP 429, 502, 503 and 504, and JSON-RPC rate-limit errors (`-32005`, or text such as "rate
+Any other key is an error. HTTP 429, 500, 502, 503 and 504, and JSON-RPC rate-limit errors (`-32005`, or text such as "rate
 limit") or "no backend is currently healthy" (`-32011`) inside HTTP 200, are retried up to 3 times with that
-back-off, then fail as `rpc_rate_limited` (exit 5). Redirects are refused (a redirect would be an unpinned URL). Every
+back-off, then fail as `rpc_rate_limited` (exit 5); a response body that stalls or is cut mid-way is retried the same way,
+then fails as `rpc_unreachable` (exit 5). Redirects are refused (a redirect would be an unpinned URL). Every
 RPC request carries an `eth_chainId` probe; an endpoint on another chain is `chain_mismatch`. A request never has
 more than 10 items; an endpoint that rejects batches is served one request at a time.
 
@@ -431,7 +432,7 @@ overwrites, **including with an error body, so use a fresh run-id**) and print o
 `usable` is true only for HTTP 200, valid JSON object, no `error` field, and all five top-level keys with every row
 carrying `id`, `wrappedTokens`, `collateralToken`, `parentOutcome` and `marketStatus`. It is **not** a substitute for
 C step 2's identity checks. A non-200 answer is reported as `status` with `usable:false` (exit 0); an unreachable
-function is `data_unreachable` (exit 5). Either way: take C step 2's onchain fallback, unless the saved body's `error` text meets C step 1's stop test (it is read first, whatever `status`).
+function, or a body that stalls or breaks off on every attempt (retried like a 429), is `data_unreachable` (exit 5). Either way: take C step 2's onchain fallback, unless the saved body's `error` text meets C step 1's stop test (it is read first, whatever `status`).
 
 ### `data-rows <run-id> <offset> <count>` (extension)
 The raw body is one line of about 119 KB that the agent's file reader refuses, and the wake has no `node -e`; this is

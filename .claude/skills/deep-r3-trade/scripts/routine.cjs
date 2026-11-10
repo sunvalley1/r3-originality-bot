@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 // routine.cjs - the scheduled run of deep-r3-trade on any operating system (steps/I-setup.md I.2 section 7). It is what
 // the AI agent of a Claude Code routine runs, and what a person can run by hand the same way. It does what the old
-// Windows wrapper did (the arm lock, the hash pins, the installed planner's `wake` exactly once, the final status and
-// exit code) and what a cloud run also needs (installing the tools outside the project, pushing the run records).
+// Windows wrapper did (the arm lock, the hash pins, the installed planner's `wake`, the final status and exit code)
+// and what a cloud run also needs (installing the tools outside the project, pushing the run records). A wake that
+// ends on a stop the planner marks recoverable is followed by a fresh wake on a new run-id inside the same call, while
+// the setup record allows it (I-setup.md I.2 section 6, A fresh wake in the same run): the agent never runs trade twice.
 // Run it from the project root:
 //
 //   node .claude/skills/deep-r3-trade/scripts/routine.cjs install [--ethers-from <node_modules folder>]
@@ -14,9 +16,11 @@
 //       (SETUP.md step 3)
 //   node ... routine.cjs trade [--push]
 //       one scheduled run, or a trade now (the same run started by hand): the lock, the planner and signer pins of
-//       run/setup.deep-r3-trade.json (the paths must be this install's), `planner wake` once, the final status; --push
-//       first takes the repository lock (each cloud run has a clone of its own, so the arm lock cannot see another run;
-//       see repoLock below), then commits and pushes the run records while the run lasts and at its end
+//       run/setup.deep-r3-trade.json (the paths must be this install's), `planner wake`, then a fresh wake on a new
+//       run-id after a stop the planner marks recoverable (wake-status.json retry) while schedule.fresh_wakes_max, the
+//       cap and the first wake's deadline allow, the final status; --push first takes the repository lock (each cloud
+//       run has a clone of its own, so the arm lock cannot see another run; see repoLock below), then commits and
+//       pushes the run records while the run lasts, after each wake and at its end
 //   node ... routine.cjs clearance [--push]
 //       the no-send check of an install: c, d, e, f, g --indep and exec --check on a new run-id; signs nothing. It
 //       passes only when exec --check checked a plan (an empty plan checks nothing), and it writes
@@ -38,8 +42,9 @@
 // the lock is held, or (trade --push) the repository lock could not be taken; 3 the run aborted; 4 refused at the gates
 // (a pin, a missing tool or key; from trade --push, a commit outside run/ on origin that the pin check did not see) or,
 // from `trade`, the planner's own safety stop; 5 nothing to trade on (no-csv, csv-store-mismatch) or, from `trade`, the
-// planner's transport failure; 6 a time or turn budget ran out. `trade` passes the planner's exit code through
-// otherwise (`exitFor`). It signs nothing itself: every send is the planner's, through the signer.
+// planner's transport failure (nonce-lag included); 6 a time or turn budget ran out. `trade` passes the planner's exit
+// code through otherwise (`exitFor`): after fresh wakes, the last wake's, with every wake's in `attempts`. It signs
+// nothing itself: every send is the planner's, through the signer.
 'use strict';
 
 const fs = require('fs');
@@ -68,6 +73,9 @@ const sha256File = (p) => crypto.createHash('sha256').update(fs.readFileSync(p))
 const home = (p) => (p === '~' ? os.homedir() : typeof p === 'string' && /^~[\\/]/.test(p) ? path.join(os.homedir(), p.slice(2)) : p);
 const iso = () => new Date().toISOString();
 const clip = (s, n) => { const t = String(s === undefined || s === null ? '' : s); return t.length > n ? t.slice(0, n) + '...' : t; };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// install and the repository lock are synchronous and nothing else runs in this process meanwhile (no wake, no timer)
+const sleepSync = (ms) => { if (ms > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); };
 function log(line) { try { fs.mkdirSync(RUN, { recursive: true }); fs.appendFileSync(LOG, `[${iso()}] ${line}\n`); } catch (e) { /* the log is best effort */ } }
 // the tools' child processes never get the key's environment variables: install has written what the signer reads.
 // Nor Claude Code's own variables, which no tool reads: a cloud session sets CLAUDE_AUTOCOMPACT_PCT_OVERRIDE, whose
@@ -116,6 +124,11 @@ const paths = (c) => ({
 });
 
 // ---- install
+// npm's answers that a later try can change (the network, the registry, a throttle): tried again 30 s, then 90 s later.
+// Any other failure (a version that does not exist, a full disk) stops at once, and so does a refusal (unauthorized,
+// forbidden, not in this registry), which names the registry too
+const NPM_TRANSIENT = /E(TIMEDOUT|CONNRESET|AI_AGAIN|NOTFOUND|CONNREFUSED)|socket hang up|network|fetch failed|registry|\b5\d\d\b|\b429\b/i;
+const NPM_REFUSED = /\bE(401|403|404|AUTH|NEEDAUTH)\b/;
 function writeFile(p, data, mode) { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, data, mode ? { mode } : undefined); if (mode && !isWin) fs.chmodSync(p, mode); }
 function ethersIn(dir, from) {
   const pj = path.join(dir, 'node_modules', 'ethers', 'package.json');
@@ -126,8 +139,14 @@ function ethersIn(dir, from) {
     fs.cpSync(from, path.join(dir, 'node_modules'), { recursive: true });
   } else {
     writeFile(path.join(dir, 'package.json'), JSON.stringify({ private: true, dependencies: { ethers: ETHERS } }, null, 2) + '\n');
-    const r = cp.spawnSync(isWin ? 'npm.cmd' : 'npm', ['install', '--no-audit', '--no-fund', '--ignore-scripts', '--prefix', dir], { cwd: dir, encoding: 'utf8', timeout: 600000, shell: isWin, env: childEnv() });
-    if (r.status !== 0) throw new Exit(4, `npm install ethers@${ETHERS} in ${dir} failed: ${clip(String(r.stderr || (r.error && r.error.message) || ''), 400)}`);
+    let r = null; let tries = 0;
+    for (const waitS of [0, 30, 90]) {
+      sleepSync(waitS * 1000); tries++;
+      r = cp.spawnSync(isWin ? 'npm.cmd' : 'npm', ['install', '--no-audit', '--no-fund', '--ignore-scripts', '--prefix', dir], { cwd: dir, encoding: 'utf8', timeout: 600000, shell: isWin, env: childEnv() });
+      const said = `${r.stderr || ''} ${(r.error && r.error.message) || ''}`;
+      if (r.status === 0 || NPM_REFUSED.test(said) || !NPM_TRANSIENT.test(said)) break;
+    }
+    if (r.status !== 0) throw new Exit(4, `npm install ethers@${ETHERS} in ${dir} failed${tries > 1 ? ` (${tries} tries)` : ''}: ${clip(String(r.stderr || (r.error && r.error.message) || ''), 400)}`);
   }
   if (have() !== ETHERS) throw new Exit(4, `ethers ${ETHERS} did not land in ${dir}/node_modules`);
   return 'installed';
@@ -265,14 +284,31 @@ function release(ownerText) {
 
 // ---- the run records in git (routine mode): everything under run/ but the lock and the scratch folders
 const RECORD_EXCLUDES = ['.lock.deep-r3-trade', '*/exec-tmp', '*/f-tmp', '*/g-tmp', '*/halfb-tmp', '*/recovery-tmp'];
-function git(args, o = {}) { return cp.spawnSync('git', args, { cwd: ROOT, encoding: 'utf8', timeout: 180000, windowsHide: true, ...o }); }
+const GIT_TIMEOUT_MS = 180000;
+function git(args, o = {}) { return cp.spawnSync('git', args, { cwd: ROOT, encoding: 'utf8', timeout: GIT_TIMEOUT_MS, windowsHide: true, ...o }); }
 // A checkpoint (rebase false) runs while the planner writes run/: it only commits and pushes, and when origin has moved
 // it skips, because a pull would check files out under the planner's feet. The final push, after the planner has
-// exited, pulls and rebases (records never collide); a pull that fails is a failed push, its rebase aborted.
+// exited, pulls and rebases (records never collide); a pull that fails is a failed round, its rebase aborted, tried
+// again like a failed push, except a refusal of access or a conflict, which end the push at once.
 // the branch the records and the repository lock go to: git.branch, else the clone's current branch, never a detached
 // HEAD (a push to HEAD:HEAD is no branch)
 const NO_BRANCH = 'this clone is on no branch (a detached HEAD): set git.branch in routine.config.json (main)';
 function recordsBranch(c) { const b = c.git.branch || String(git(['rev-parse', '--abbrev-ref', 'HEAD']).stdout || '').trim(); return b && b !== 'HEAD' ? b : null; }
+// a remote that refuses this clone (no access, no such repository) answers the same however long the run waits
+const GIT_DENIED = /\b40[13]\b|denied|permission|authentication|not found|could not read (Username|Password)/i;
+// a fetch that fails is tried again 10 s and 30 s later (a network or server hiccup), unless git says access was refused
+function gitFetch(branch) {
+  let fe = null;
+  for (const waitS of [0, 10, 30]) {
+    sleepSync(waitS * 1000);
+    fe = git(['fetch', '-q', 'origin', branch]);
+    if (fe.status === 0 || GIT_DENIED.test(String(fe.stderr || fe.stdout || ''))) break;
+  }
+  return fe;
+}
+// the Bash tool kills the call at its start + BASH_MAX_TIMEOUT_MS (I-setup.md I.2 section 7, Tool timeout); a run of
+// one's own has no such limit set, so the routine's 6 h stands in
+const bashLeftMs = () => { const m = Number(process.env.BASH_MAX_TIMEOUT_MS); return (Number.isFinite(m) && m > 0 ? m : 21600000) - process.uptime() * 1000; };
 function pushRecords(c, message, only, { rebase = true } = {}) {
   const spec = [...(only ? [].concat(only).map((o) => `run/${o}`) : ['run']), ...RECORD_EXCLUDES.map((x) => `:(exclude,glob)run/${x}/**`)];
   const add = git(['add', '-f', '-A', '--', ...spec]);
@@ -282,15 +318,28 @@ function pushRecords(c, message, only, { rebase = true } = {}) {
   if (cm.status !== 0) return { pushed: false, error: clip(cm.stderr || cm.stdout, 300) };
   const branch = recordsBranch(c);
   if (!branch) return { pushed: false, error: NO_BRANCH };
+  // a final push (rebase) is tried 4 times, 5, 15 and 30 s apart, then once more after 60 s: the records, and the
+  // removal of the repository lock, are what the next run needs. A round starts only while its wait and its two git
+  // calls at their timeout still fit before the Bash tool's limit, so the call never dies before its JSON line
   let last = null;
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < 5; i++) {
+    if (i) {
+      const waitMs = [5, 15, 30, 60][i - 1] * 1000;
+      if (bashLeftMs() < waitMs + 2 * GIT_TIMEOUT_MS) break;
+      sleepSync(waitMs);
+      const id = ['-c', `user.name=${c.git.name}`, '-c', `user.email=${c.git.email}`]; // a rebase writes commits too
+      const pl = git([...id, 'pull', '-q', '--rebase', 'origin', branch]); // another routine pushed meanwhile; records never collide
+      if (pl.status !== 0) {
+        git([...id, 'rebase', '--abort']); last = `pull --rebase failed: ${pl.stderr || pl.stdout}`;
+        if (GIT_DENIED.test(last) || /CONFLICT|could not apply/i.test(last)) break;
+        continue;
+      }
+    }
     const p = git(['push', '-q', 'origin', `HEAD:${branch}`]);
     if (p.status === 0) return { pushed: true, branch };
-    last = p.stderr;
+    last = p.stderr || p.stdout;
     if (!rebase) return { pushed: false, branch, deferred: true, error: clip(`origin moved; the final push carries this commit: ${last}`, 300) };
-    const id = ['-c', `user.name=${c.git.name}`, '-c', `user.email=${c.git.email}`]; // a rebase writes commits too
-    const pl = git([...id, 'pull', '-q', '--rebase', 'origin', branch]); // another routine pushed meanwhile; records never collide
-    if (pl.status !== 0) { git([...id, 'rebase', '--abort']); return { pushed: false, branch, error: clip(`pull --rebase failed: ${pl.stderr || pl.stdout}`, 300) }; }
+    if (GIT_DENIED.test(String(last))) break;
   }
   return { pushed: false, branch, error: clip(last, 300) };
 }
@@ -324,7 +373,7 @@ function acquireRepoLock(c, limitH) {
   const mine = new Set(); // the tokens of this run's own lock commits: a push that landed but reported an error is still ours
   let last = '';
   for (let i = 0; i < 5; i++) {
-    const fe = git(['fetch', '-q', 'origin', branch]);
+    const fe = gitFetch(branch);
     if (fe.status !== 0) return { unavailable: `git fetch from origin ${branch} failed${c.git.branch ? '' : ' (git.branch is empty in routine.config.json, so this clone\'s branch was used: set it to main)'}: ${clip(fe.stderr || fe.stdout, 300)}` };
     if (git(['diff', '--quiet', pinned, 'FETCH_HEAD', '--', '.', ':(exclude)run']).status !== 0) {
       const which = String(git(['log', '-1', '--format=%h %s', `${pinned}..FETCH_HEAD`, '--', '.', ':(exclude)run']).stdout || '').trim() || 'a commit outside run/';
@@ -353,10 +402,12 @@ function acquireRepoLock(c, limitH) {
     if (p.status === 0) return { lock, branch, replaced: held ? lockHolder(held) : null };
     last = p.stderr || p.stdout;
     // refused: another push landed first, perhaps another run's lock (or this one landed and the answer was lost:
-    // the next fetch finds this run's own token). Drop this commit (the clone was clean, so only the lock file changes
-    // back) and look again
+    // the next fetch finds this run's own token), or the server failed. Drop this commit (the clone was clean, so only
+    // the lock file changes back) and look again after 2, 4, 8, then 16 s; a refusal of access ends it at once
     const rs = git(['reset', '-q', '--keep', 'HEAD~1']);
     if (rs.status !== 0) return { unavailable: `the lock push was refused and the lock commit could not be dropped: ${clip(rs.stderr || rs.stdout, 300)}` };
+    if (GIT_DENIED.test(String(last))) return { unavailable: `the lock push was refused: ${clip(last, 300)}` };
+    if (i < 4) sleepSync(2000 * 2 ** i);
   }
   return { unavailable: `the lock push was refused 5 times: ${clip(last, 300)}` };
 }
@@ -369,6 +420,111 @@ function dropRepoLock(lock) {
   return 'removed';
 }
 const repoLockOut = (lock, pushed) => (lock ? { run_id: lock.run_id, released: !!(pushed && pushed.pushed), ...(pushed && pushed.pushed ? {} : { note: `still on origin until ${lock.expires_at}, or until removed by hand: the records were not pushed` }) } : null);
+
+// ---- a fresh wake in the same run (I-setup.md I.2 section 6). The planner decides whether its stop is recoverable
+// (wake-status.json `retry`: only its throw site tells a lagging RPC from another sender, or a refusal from a transport
+// failure); this decides whether there is room for another wake: the setup record's opt-in, the cap, the time left,
+// origin and the pins. Deny by default: anything missing or unexpected ends the loop. Both locks stay held across
+// the wakes; each wake gets a new run-id, never one reused, and owner.txt keeps the first started_at, so every wake has
+// the first one's deadline (wake.cjs reads it from there)
+const RETRY_CLASSES = ['transport', 'market', 'settle', 'foreign'];
+const NO_INPUT = ['no-csv', 'csv-store-mismatch'];
+const QUIET_POLL_MS = 30000;
+// schedule.fresh_wakes_max: 0, 1 or 2, missing meaning 0; any other value is no switch at all (null: off, said so)
+function freshWakesMax(setup) { const v = ((setup && setup.schedule) || {}).fresh_wakes_max; return v === undefined || v === null ? 0 : [0, 1, 2].includes(v) ? v : null; }
+// the wake's deadline as wake.cjs computes it: the first wake's start + time_limit_hours - 10 minutes, or none
+function deadlineOf(startedAt, setup) { const h = Number(((setup && setup.schedule) || {}).time_limit_hours); const t = Date.parse(startedAt); return Number.isFinite(h) && h > 0 && Number.isFinite(t) ? t + h * 3600000 - 600000 : null; }
+const isSecs = (x) => typeof x === 'number' && Number.isFinite(x) && x >= 0;
+// the verdict as the JSON line carries it: its own fields only, clipped
+function verdictOut(v) {
+  if (!v || typeof v !== 'object') return null;
+  return { verdict: clip(v.verdict, 20), class: v.class === undefined || v.class === null ? null : clip(v.class, 20), key: v.key === undefined || v.key === null ? null : clip(v.key, 160),
+    after_s: isSecs(v.after_s) ? v.after_s : null, ...(v.quiet_s !== undefined ? { quiet_s: isSecs(v.quiet_s) ? v.quiet_s : null } : {}), why: clip(v.why, 400) };
+}
+function decideRetry({ rc, ws, plannerFinal, fwm, attempts, limitH, deadlineMs, endLabel = 'the deadline' }) {
+  const no = (why) => ({ go: false, why });
+  // a wake with no final write of its own (a signal, a crash) may have left a signer child sending: the next scheduled
+  // run repairs it
+  if (!plannerFinal) return no(`the planner's wake ended without its final write (exit ${rc}): a signer it started may still be running, so the next scheduled run repairs it`);
+  if (![3, 4, 5].includes(rc)) return no(rc === 0 ? 'the wake ended without a stop (planner exit 0)' : `planner exit ${rc} is never retried`);
+  if (NO_INPUT.includes(ws.status)) return no(`status ${ws.status}: nothing to trade on until its input changes`);
+  const v = ws.retry;
+  if (!v || typeof v !== 'object' || v.verdict !== 'fresh-wake') return no(`the planner's verdict is ${v && typeof v === 'object' ? `${clip(v.verdict, 20) || 'empty'}${v.why ? ` (${clip(v.why, 300)})` : ''}` : v === undefined || v === null ? 'missing' : 'not an object'}: not a stop it marks recoverable`);
+  if (!RETRY_CLASSES.includes(v.class) || typeof v.key !== 'string' || !v.key || !isSecs(v.after_s) || (v.class === 'foreign' && !isSecs(v.quiet_s))) return no(`the planner's retry verdict is malformed (${clip(JSON.stringify(v), 300)})`);
+  // exit 4 is the planner's safety stop: a verdict calling one recoverable is believed only where a safety stop is the
+  // expected shape (a Pending nonce, another sender's transaction), a guard against a planner bug
+  if (rc === 4 && !['settle', 'foreign'].includes(v.class)) return no(`planner exit 4 with class ${v.class}: an exit 4 is retried only for class settle or foreign`);
+  if (fwm === null) return no('schedule.fresh_wakes_max in run/setup.deep-r3-trade.json is not 0, 1 or 2: fresh wakes are off');
+  if (fwm === 0) return no('fresh wakes are off (schedule.fresh_wakes_max in run/setup.deep-r3-trade.json is 0 or missing)');
+  const done = attempts.length - 1; // the fresh wakes so far
+  if (done >= fwm) return no(`the cap: ${done} fresh wake(s) ran, schedule.fresh_wakes_max is ${fwm}`);
+  const key = clip(v.key, 160);
+  if (done && attempts[done - 1].retry && attempts[done - 1].retry.key === key) return no(`the same stop as the wake before (${key}): a fresh wake did not clear it`);
+  if (v.class === 'settle' && attempts.slice(0, -1).some((x) => x.retry && x.retry.class === 'settle')) return no('one settle retry per run, already used: what is still unsettled is the next scheduled run\'s');
+  if (!deadlineMs) return no('the run has no deadline (schedule.time_limit_hours is missing or not a positive number)');
+  // the wait doubles with each fresh wake; the wake that follows must still have time_limit_hours / 6 (60 minutes at
+  // 6 h) before the deadline, so it never starts where a group would not fit
+  const waitS = Math.max(60, v.after_s * 2 ** done); const roomMs = limitH * 600000;
+  if (Date.now() + waitS * 1000 + roomMs > deadlineMs) return no(`no time: a fresh wake after ${waitS} s would leave less than ${Math.round(roomMs / 60000)} min before ${endLabel} ${new Date(deadlineMs).toISOString()}`);
+  return { go: true, waitS, roomMs, cls: v.class, ...(v.class === 'foreign' ? { quietS: v.quiet_s } : {}), why: `class ${v.class}, ${key}` };
+}
+// a fresh wake's run-id: a new one. Both slugs of this minute taken: wait into the next UTC minute, up to 3 times
+async function freshRunId() {
+  for (let i = 0; i < 3; i++) {
+    try { return newRunId(''); } catch (e) { if (!(e instanceof Exit) || e.code !== 2) throw e; log(`${e.message}: the fresh wake waits into the next minute`); }
+    await sleep(60000 - (Date.now() % 60000) + 1000);
+  }
+  return null;
+}
+// owner.txt is replaced whole, written beside it and renamed over it, so the planner never reads half of one
+function replaceFile(p, text) {
+  fs.writeFileSync(`${p}.tmp`, text);
+  for (let i = 0; ; i++) { try { fs.renameSync(`${p}.tmp`, p); return; } catch (e) { if (i >= 20 || !['EPERM', 'EBUSY', 'EACCES'].includes(e.code)) throw e; sleepSync(100); } }
+}
+const setupSha = () => { try { return sha256File(SETUP); } catch (e) { return null; } };
+// before a fresh wake, with --push: origin as it is now, fetched and never merged, so no code or record this session's
+// pin check and first wake did not see enters the clone. A commit outside run/, any change to the setup record (an
+// operator's change, a pause included) or a repository lock that is no longer this run's ends the loop
+function originChanged(c, repoLock) {
+  const branch = repoLock.branch;
+  const fe = gitFetch(branch);
+  if (fe.status !== 0) return `git fetch from origin ${branch} failed before a fresh wake: ${clip(fe.stderr || fe.stdout, 300)}`;
+  if (git(['diff', '--quiet', 'HEAD', 'FETCH_HEAD', '--', '.', ':(exclude)run']).status !== 0) {
+    const which = String(git(['log', '-1', '--format=%h %s', 'HEAD..FETCH_HEAD', '--', '.', ':(exclude)run']).stdout || '').trim() || 'a commit outside run/';
+    return `origin's ${branch} has a commit outside run/ since this run started (${clip(which, 120)}): no fresh wake runs code the pin check did not see`;
+  }
+  if (git(['diff', '--quiet', 'HEAD', 'FETCH_HEAD', '--', 'run/setup.deep-r3-trade.json']).status !== 0) return `run/setup.deep-r3-trade.json changed on origin since this run started (an operator's change, a pause included)`;
+  const sh = git(['show', `FETCH_HEAD:${REPO_LOCK_GIT}`]);
+  let l = null; try { l = sh.status === 0 ? JSON.parse(sh.stdout) : null; } catch (e) { l = null; }
+  if (!l || l.token !== repoLock.token) return `origin's ${REPO_LOCK_GIT} is ${l ? `run ${clip(l.run_id, 40)}'s` : 'gone or unreadable'}, no longer this run's`;
+  return null;
+}
+// the holder's nonce, read-only, through the installed chain helper (`nonce <address>`: latest and pending)
+function holderNonce(P, c) {
+  const r = cp.spawnSync(process.execPath, [P.helper, 'nonce', c.signerAddress], { cwd: ROOT, encoding: 'utf8', timeout: 120000, windowsHide: true, env: childEnv() });
+  const lines = String(r.stdout || '').trim().split(/\r?\n/);
+  let j = null; try { j = JSON.parse(lines[lines.length - 1]); } catch (e) { j = null; }
+  if (r.status === 0 && j && Number.isInteger(j.latest) && Number.isInteger(j.pending)) return { ok: true, latest: j.latest, pending: j.pending };
+  return { ok: false, error: clip(j ? JSON.stringify(j) : r.stderr || (r.error && r.error.message) || `exit ${r.status}`, 200) };
+}
+// class foreign (another sender used the wallet): no fresh wake while that sender is still at it. The holder's nonce must
+// read latest == pending and stay unchanged for quiet_s seconds, read every 30 s; the wait gives up once a fresh wake
+// would no longer leave its room before the deadline. The fresh wake's start-of-run repair then settles the other
+// sender's transactions from chain state
+async function quietWait(P, c, quietS, deadlineMs, roomMs, endLabel = 'the deadline') {
+  let at = null; let since = 0; let reads = 0; let last = 'none';
+  log(`waiting for the wallet to be quiet: the holder's nonce at latest == pending, unchanged for ${quietS} s`);
+  for (;;) {
+    if (Date.now() + roomMs > deadlineMs) return { quiet: false, reads, why: `the wallet did not stay quiet for ${quietS} s (latest == pending, unchanged) in time for a fresh wake before ${endLabel} ${new Date(deadlineMs).toISOString()} (${reads} reads, the last ${last})` };
+    const r = holderNonce(P, c); reads++;
+    last = r.ok ? `latest ${r.latest} pending ${r.pending}` : `unreadable: ${r.error}`;
+    if (r.ok && r.latest === r.pending) {
+      if (at !== r.latest) { at = r.latest; since = Date.now(); }
+      if (Date.now() - since >= quietS * 1000) { log(`the wallet is quiet: nonce ${at} unchanged for ${Math.round((Date.now() - since) / 1000)} s (${reads} reads)`); return { quiet: true, reads, nonce: at }; }
+    } else { if (at !== null) log(`the wallet is not quiet: ${last}`); at = null; }
+    await sleep(QUIET_POLL_MS);
+  }
+}
 
 // ---- the final status, as the old wrapper wrote it
 function wakeStatus(rid) { try { return readJson(path.join(RUN, rid, 'wake-status.json')); } catch (e) { return null; } }
@@ -427,6 +583,7 @@ async function trade(c, opts) {
     return { exit: 2, out: { ok: false, subcommand: 'trade', exit: 2, status: 'lock-held', notes: 'another run holds run/.lock.deep-r3-trade' } };
   }
   let repoLock = null;
+  const S = { rid, attempts: [] }; // the wake under way and every wake so far, for the error line
   try {
     if (opts.push) {
       // nothing is logged before this or on a refusal here: the log is a tracked file, and the pull needs a clean clone
@@ -439,22 +596,41 @@ async function trade(c, opts) {
         return { exit: code, out: { ok: false, subcommand: 'trade', exit: code, status, notes, ...(r.held ? { holder: lockHolder(r.held) } : {}) } };
       }
       repoLock = { ...r.lock, branch: r.branch, replaced: r.replaced };
-      rid = r.lock.run_id;
+      rid = r.lock.run_id; S.rid = rid;
       setup = readSetup(); // the pull may have brought a newer setup record
       if (!setup) throw new Exit(2, 'no run/setup.deep-r3-trade.json after the pull: set the bot up first (steps/I-setup.md)');
     }
-    return await tradeLocked(c, opts, setup, rid, repoLock);
+    return await tradeLocked(c, opts, setup, rid, repoLock, S);
   } catch (e) {
     // anything that throws once the lock is taken releases it: ours, or one whose owner file was never written
     let o = null; try { o = readJson(path.join(LOCK, 'owner.txt')); } catch (e2) { o = null; }
     if (!o || o.pid === process.pid) fs.rmSync(LOCK, { recursive: true, force: true });
-    if (dropRepoLock(repoLock) === 'removed') { try { pushRecords(c, `records: run ${rid} ended on an internal error`); } catch (e2) { /* best effort: the lock expires */ } }
+    if (dropRepoLock(repoLock) === 'removed') { try { pushRecords(c, `records: run ${S.rid} ended on an internal error`); } catch (e2) { /* best effort: the lock expires */ } }
+    // the wakes that ran (and the one under way) are in the error line, so the agent reads their records
+    if (S.attempts.length && e && typeof e === 'object') e.extra = { ...(e.extra || {}), attempts: S.attempts };
     throw e;
   }
 }
-async function tradeLocked(c, opts, setup, rid, repoLock) {
-  const owner = { pid: process.pid, process_start_time: new Date(Date.now() - process.uptime() * 1000).toISOString(), host: os.hostname(), started_at: iso(), stage: 'claude-p', run_id: rid };
-  const ownerText = JSON.stringify(owner);
+// the gates: the signer and the planner the setup record pins, by path and sha256. The pinned paths must be the ones
+// install lays down (outside the project, from this commit): the setup record is a run/ record, so it may only confirm
+// those files, never name others; and the planner config must start exactly that helper and signer. Checked before the
+// first wake and again before each fresh wake
+function gateWhy(setup, P) {
+  const a = (setup && setup.autonomy) || {};
+  let pcfg = null; try { pcfg = readJson(path.join(P.plannerDir, 'planner.config.json')); } catch (e) { pcfg = null; }
+  for (const [what, p, h, installed] of [['signer', a.signer_path, a.signer_sha256, P.signer], ['planner', a.planner_path, a.planner_sha256, P.planner]]) {
+    if (!p || norm(p) !== norm(installed)) return `${what} path: the setup record pins ${p}, but this install's ${what} is ${installed}`;
+    if (isInside(ROOT, p)) return `${what} path ${p} is inside the project`;
+    if (!fs.existsSync(p)) return `${what} file missing: ${p}`;
+    if (sha256File(p) !== String(h || '').toLowerCase()) return `${what} hash mismatch: ${p} hashes ${sha256File(p)}, the setup record pins ${h}`;
+    if (what === 'planner' && (!pcfg || norm(pcfg.signerPath || '') !== norm(P.signer) || norm(pcfg.helperPath || '') !== norm(P.helper))) return `the planner config ${path.join(P.plannerDir, 'planner.config.json')} does not name this install's signer and helper`;
+  }
+  return '';
+}
+async function tradeLocked(c, opts, setup, rid, repoLock, S) {
+  // attempt and first_run_id say which wake of the run this is; started_at stays the first wake's for every wake
+  const owner = { pid: process.pid, process_start_time: new Date(Date.now() - process.uptime() * 1000).toISOString(), host: os.hostname(), started_at: iso(), stage: 'claude-p', run_id: rid, attempt: 1, first_run_id: rid };
+  let ownerText = JSON.stringify(owner);
   fs.writeFileSync(path.join(LOCK, 'owner.txt'), ownerText, { flag: 'wx' });
   const P = paths(c);
   log(`run ${rid}: lock taken by routine.cjs (pid ${process.pid} on ${os.hostname()})`);
@@ -462,38 +638,66 @@ async function tradeLocked(c, opts, setup, rid, repoLock) {
   if (fs.existsSync(P.sendLock)) log(`leftover signer send-lock ${P.sendLock}, not deleted`);
   log(`signer log "${P.signerLog}"`);
 
-  // the gates: the signer and the planner the setup record pins, by path and sha256. The pinned paths must be the
-  // ones install lays down (outside the project, from this commit): the setup record is a run/ record, so it may only
-  // confirm those files, never name others; and the planner config must start exactly that helper and signer
-  const a = setup.autonomy || {};
-  let pcfg = null; try { pcfg = readJson(path.join(P.plannerDir, 'planner.config.json')); } catch (e) { pcfg = null; }
-  for (const [what, p, h, installed] of [['signer', a.signer_path, a.signer_sha256, P.signer], ['planner', a.planner_path, a.planner_sha256, P.planner]]) {
-    let why = '';
-    if (!p || norm(p) !== norm(installed)) why = `${what} path: the setup record pins ${p}, but this install's ${what} is ${installed}`;
-    else if (isInside(ROOT, p)) why = `${what} path ${p} is inside the project`;
-    else if (!fs.existsSync(p)) why = `${what} file missing: ${p}`;
-    else if (sha256File(p) !== String(h || '').toLowerCase()) why = `${what} hash mismatch: ${p} hashes ${sha256File(p)}, the setup record pins ${h}`;
-    else if (what === 'planner' && (!pcfg || norm(pcfg.signerPath || '') !== norm(P.signer) || norm(pcfg.helperPath || '') !== norm(P.helper))) why = `the planner config ${path.join(P.plannerDir, 'planner.config.json')} does not name this install's signer and helper`;
-    if (!why) continue;
+  const why = gateWhy(setup, P);
+  if (why) {
     const ws = finalize(rid, 4, `refused at the gates: ${why}`);
     release(ownerText); log(`run ${rid}: refused at the gates: ${why}`);
     dropRepoLock(repoLock);
     const pushed = opts.push ? pushRecords(c, `records: run ${rid} refused at the gates`) : null;
     return { exit: 4, out: { ok: false, subcommand: 'trade', run_id: rid, exit: 4, status: ws.status, notes: why, pushed, ...(repoLock ? { repo_lock: repoLockOut(repoLock, pushed) } : {}) } };
   }
-  const live = liveSessions();
+  let live = liveSessions();
   fs.writeFileSync(path.join(LOCK, 'live-runs.txt'), live.join('\n'));
 
-  log(`run ${rid}: planner wake started`);
-  const rc = await wake(P.planner, rid, c, opts.push);
-  log(`run ${rid}: planner wake exited ${rc}`);
-  const ws = finalize(rid, rc);
-  const RC = exitFor(rc, ws);
+  // the wakes: the first, then a fresh one on a new run-id while decideRetry allows. Without --push (a run of one's own)
+  // the arm lock alone guards them, and a changed setup record in this clone ends the loop
+  const limitH = Number((setup.schedule || {}).time_limit_hours);
+  const deadlineMs = deadlineOf(owner.started_at, setup);
+  // the loop's own end: the deadline, or the Bash tool's limit when that comes first (a lock that took minutes to take
+  // starts the deadline late): every fresh wake must start a sixth of the limit before it
+  const endMs = deadlineMs ? Math.min(deadlineMs, Date.now() + bashLeftMs()) : null;
+  const endLabel = endMs === deadlineMs ? 'the deadline' : 'the Bash tool\'s limit';
+  const fwm = freshWakesMax(setup); const setupSha0 = setupSha();
+  const attempts = S.attempts; let retryStopped = null; let rc; let ws; let RC;
+  for (let k = 1; ; k++) {
+    const at = { run_id: rid, started_at: iso() }; attempts.push(at); S.rid = rid;
+    log(`run ${rid}: planner wake started${k > 1 ? ` (wake ${k} of the run ${owner.first_run_id})` : ''}`);
+    rc = await wake(P.planner, rid, c, opts.push);
+    log(`run ${rid}: planner wake exited ${rc}`);
+    const w0 = wakeStatus(rid); const plannerFinal = !!(w0 && w0.finished_at); // before finalize writes its own
+    ws = finalize(rid, rc); RC = exitFor(rc, ws);
+    Object.assign(at, { finished_at: iso(), planner_exit: rc, exit: RC, status: ws.status, stopped_at_step: ws.stopped_at_step || null, retry: verdictOut(ws.retry) });
+    const d = decideRetry({ rc, ws, plannerFinal, fwm, attempts, limitH, deadlineMs: endMs, endLabel });
+    if (!d.go) { at.decision = `no fresh wake: ${d.why}`; retryStopped = d.why; log(`run ${rid}: ${at.decision}`); break; }
+    at.decision = `a fresh wake after ${d.waitS} s${d.quietS !== undefined ? ` and ${d.quietS} s of quiet at the wallet` : ''}: ${d.why}`;
+    log(`run ${rid}: ${at.decision}`);
+    // never "finished": an operator watching origin must not take this run for finished while it may still send
+    if (opts.push) { const r = pushRecords(c, `records: run ${rid} attempt ${k} ended (${ws.status}), exit ${RC}; a fresh wake follows in this run`, undefined, { rebase: false }); if (r.error) log(`run ${rid}: records not pushed before the fresh wake: ${r.error}`); }
+    await sleep(d.waitS * 1000);
+    let stop = null;
+    if (d.cls === 'foreign') { const q = await quietWait(P, c, d.quietS, endMs, d.roomMs, endLabel); if (!q.quiet) stop = q.why; }
+    if (!stop && setupSha() !== setupSha0) stop = 'run/setup.deep-r3-trade.json changed in this clone since the run started (an operator\'s change, a pause included)';
+    if (!stop && opts.push) stop = originChanged(c, repoLock);
+    if (!stop) { const g = gateWhy(readSetup(), P); if (g) stop = `refused at the gates before a fresh wake: ${g}`; }
+    const next = stop ? null : await freshRunId();
+    if (!stop && !next) stop = 'no free run-id in 3 minutes (both slugs of each minute taken)';
+    // the time rule again, after the push, the wait and the checks
+    if (!stop && Date.now() + d.roomMs > endMs) stop = `no time: after the wait and the checks, less than ${Math.round(d.roomMs / 60000)} min remain before ${endLabel} ${new Date(endMs).toISOString()}`;
+    if (stop) { at.decision = `waited ${d.waitS} s for a fresh wake (${d.why}), then none: ${stop}`; retryStopped = stop; log(`run ${rid}: no fresh wake: ${stop}`); break; }
+    // the next wake's owner: the same process, host and first started_at (the deadline); its own run-id, which the
+    // planner's lock check requires (stage claude-p naming the wake's run-id)
+    owner.run_id = next; owner.attempt = k + 1; ownerText = JSON.stringify(owner);
+    replaceFile(path.join(LOCK, 'owner.txt'), ownerText);
+    live = liveSessions(); fs.writeFileSync(path.join(LOCK, 'live-runs.txt'), live.join('\n'));
+    rid = next;
+  }
   release(ownerText);
-  log(`run ${rid} finished, exit ${RC}`);
+  log(`run ${rid} finished, exit ${RC}${attempts.length > 1 ? ` (wake ${attempts.length} of the run ${owner.first_run_id})` : ''}`);
   dropRepoLock(repoLock);
-  const pushed = opts.push ? pushRecords(c, `records: run ${rid} finished (${ws.status}), exit ${RC}`) : null;
-  return { exit: RC, out: { ok: RC === 0, subcommand: 'trade', run_id: rid, exit: RC, planner_exit: rc, status: ws.status, stopped_at_step: ws.stopped_at_step || null, report: `run/${rid}/report.md`, live_supervised_runs: live, pushed, ...(repoLock ? { repo_lock: repoLockOut(repoLock, pushed) } : {}) } };
+  const pushed = opts.push ? pushRecords(c, `records: run ${rid} finished (${ws.status}), exit ${RC}${attempts.length > 1 ? `; wake ${attempts.length} of the run ${owner.first_run_id}` : ''}`) : null;
+  return { exit: RC, out: { ok: RC === 0, subcommand: 'trade', run_id: rid, exit: RC, planner_exit: rc, status: ws.status, stopped_at_step: ws.stopped_at_step || null, report: `run/${rid}/report.md`,
+    attempts, retry_stopped: retryStopped, deadline: deadlineMs ? new Date(deadlineMs).toISOString() : null,
+    live_supervised_runs: live, pushed, ...(repoLock ? { repo_lock: repoLockOut(repoLock, pushed) } : {}) } };
 }
 
 // ---- clearance: the no-send check of an install (I-setup.md I.2 section 7, The planner)

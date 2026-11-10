@@ -27,11 +27,15 @@
  * repository under the work folder as origin and a second clone that pushes while a run lasts. No network, no key,
  * nothing signed or sent.
  *
- * Sections (--only takes any of them): install, passthrough, clearance, gates, selftest, git.
+ * Sections (--only takes any of them): install, passthrough, clearance, gates, selftest, retry, git.
+ * The retry section is the fresh wake in the same run (I-setup.md I.2 section 6) without git: the stub writes each
+ * wake's retry verdict into wake-status.json (plan.wakes), and a stub chain helper answers the quiet wait's nonce
+ * reads. A fresh wake waits at least 60 s, so its waiting cases run in parallel, a project each (about 3 minutes).
  * The git section waits for one 20-second checkpoint (its four runs go in parallel), then tries the repository lock
  * that trade --push takes: another run's lock, an expired or unreadable one, two runs that start together (a pre-push
  * hook makes the race), a lock push that landed but reported an error, a commit outside run/ on origin, a time limit
- * raised on origin, a detached HEAD and a committed arm lock.
+ * raised on origin, a detached HEAD and a committed arm lock; then fresh wakes with --push (four more parallel runs)
+ * and the wrapper's own git steps tried again (a fetch, a lock push, the final push) or refused at once on access.
  * Three cases guard bugs these tests found in routine.cjs on 2026-10-23 (their comments say what went wrong): a key
  * variable spelled in another case on Windows, a lock left behind when the run-id was taken, and a final rebase on a
  * machine with no git identity.
@@ -78,7 +82,8 @@ function stubPlanner(STUB) {
   const exitOf = (k) => (plan.exit && Number.isInteger(plan.exit[k]) ? plan.exit[k] : 0);
   const say = (o, code) => { process.stdout.write(JSON.stringify({ ok: code === 0, subcommand: sub, run_id: rid, exit: code, stub: true, ...o }) + '\n'); process.exitCode = code; };
   let lock = null; try { lock = JSON.parse(fs.readFileSync(path.join(root, 'run', '.lock.deep-r3-trade', 'owner.txt'), 'utf8')); } catch (e) { lock = null; }
-  rec({ kind: 'call', at: new Date().toISOString(), self: __filename, argv, cwd: root, env_keys: Object.keys(process.env).sort(), lock_run_id: lock ? lock.run_id : null });
+  const owner = lock ? { run_id: lock.run_id, started_at: lock.started_at, pid: lock.pid, attempt: lock.attempt, first_run_id: lock.first_run_id, stage: lock.stage } : null;
+  rec({ kind: 'call', at: new Date().toISOString(), self: __filename, argv, cwd: root, env_keys: Object.keys(process.env).sort(), lock_run_id: lock ? lock.run_id : null, lock_owner: owner });
   if (sub === 'wake') return wake();
   if (sub === 'exec' && rest.includes('--check')) {
     const code = exitOf('exec-check');
@@ -87,8 +92,14 @@ function stubPlanner(STUB) {
   const code = exitOf(sub);
   return say(code === 0 ? { outcome: 'stub-' + sub } : { stop: { cause: 'stub-stop' } }, code);
 
-  // the scheduled run: files under run/<run-id>/ over plan.wakeSeconds, each re-read before every write
+  // the scheduled run: files under run/<run-id>/ over plan.wakeSeconds, each re-read before every write. plan.wakes[i]
+  // is this project's i-th wake (a counter in ext/stub): { exit, status, retry (written into wake-status.json),
+  // seconds, foreignPush, touchSetup (the setup record changed in this clone), noFinish (the final write without
+  // finished_at, as a wake killed after its start marker), statusAsDir (a folder where wake-status.json goes, so the
+  // wrapper's own write fails) }; past the list, or without one, the plan's defaults
   function wake() {
+    const n = (() => { const f = path.join(STUB, 'wake-count.txt'); let k = 0; try { k = Number(fs.readFileSync(f, 'utf8')) || 0; } catch (e) { k = 0; } fs.writeFileSync(f, String(k + 1)); return k; })();
+    const w = (Array.isArray(plan.wakes) && plan.wakes[n]) || {};
     const dir = path.join(root, 'run', rid);
     const mine = new Map(); const violations = []; const notes = [];
     const verify = (when) => {
@@ -112,52 +123,74 @@ function stubPlanner(STUB) {
     // plan.foreignPush ({ dir, kind, file }): a second clone pushes while this wake lasts. Made here, after the run's
     // repository lock and before any checkpoint or the final push, so the order the git cases need holds by
     // construction; with its own identity, since the no-identity case's git config has none
-    if (plan.foreignPush) {
-      const fp = plan.foreignPush; const id = ['-c', 'user.name=other clone', '-c', 'user.email=other-clone@localhost'];
+    const fp = w.foreignPush || plan.foreignPush;
+    if (fp) {
+      // kind setup: an operator's pause of the setup record (autonomy.enabled false), as valid JSON
+      const SETUP_REL = 'run/setup.deep-r3-trade.json'; const id = ['-c', 'user.name=other clone', '-c', 'user.email=other-clone@localhost'];
       const g2 = (args) => cp.spawnSync('git', [...id, ...args], { cwd: fp.dir, encoding: 'utf8', windowsHide: true }).status === 0;
       let pushed = g2(['pull', '-q', '--ff-only', 'origin', 'main']);
       if (pushed) {
         if (fp.kind === 'log') fs.appendFileSync(path.join(fp.dir, 'run', 'wake-deep-r3.log'), 'a line another clone wrote\n');
+        else if (fp.kind === 'setup') { const f = path.join(fp.dir, SETUP_REL); const s = JSON.parse(fs.readFileSync(f, 'utf8')); s.autonomy = { ...(s.autonomy || {}), enabled: false }; fs.writeFileSync(f, JSON.stringify(s, null, 1) + '\n'); }
         else fs.writeFileSync(path.join(fp.dir, fp.file), 'pushed by another clone while the run lasts\n');
-        pushed = g2(['add', '-f', fp.kind === 'log' ? 'run/wake-deep-r3.log' : fp.file])
-          && g2(['commit', '-q', '-m', fp.kind === 'log' ? 'other clone: run/wake-deep-r3.log' : 'other clone: a commit pushed while the run lasts'])
+        const rel = fp.kind === 'log' ? 'run/wake-deep-r3.log' : fp.kind === 'setup' ? SETUP_REL : fp.file;
+        pushed = g2(['add', '-f', rel])
+          && g2(['commit', '-q', '-m', fp.kind === 'log' ? 'other clone: run/wake-deep-r3.log' : fp.kind === 'setup' ? 'other clone: the setup record paused' : 'other clone: a commit pushed while the run lasts'])
           && g2(['push', '-q', 'origin', 'HEAD:main']);
       }
       rec({ kind: 'foreign-push', at: new Date().toISOString(), rid, ok: pushed });
     }
+    if (w.touchSetup) { const f = path.join(root, 'run', 'setup.deep-r3-trade.json'); const s = JSON.parse(fs.readFileSync(f, 'utf8')); s.note_from_stub = 'changed in this clone while the wake ran'; fs.writeFileSync(f, JSON.stringify(s, null, 1) + '\n'); }
     put('planner/c.json', JSON.stringify({ step: 'c', at: started }) + '\n');
     put('candidates.json', JSON.stringify({ stub: true, rows: 98 }) + '\n');
     for (const t of ['exec-tmp', 'f-tmp', 'g-tmp', 'halfb-tmp', 'recovery-tmp']) put(`${t}/scratch.json`, JSON.stringify({ scratch: t }) + '\n');
-    const t0 = Date.now(); let n = 0;
-    while (Date.now() - t0 < Number(plan.wakeSeconds || 0) * 1000) {
-      sleep(Number(plan.tickMs || 500)); n++;
-      put('progress.txt', `tick ${n} at ${new Date().toISOString()}\n`);
-      if (n % 4 === 0) put(`ticks/tick-${String(n).padStart(3, '0')}.json`, JSON.stringify({ n }) + '\n');
+    const t0 = Date.now(); let ticks = 0;
+    while (Date.now() - t0 < Number(w.seconds !== undefined ? w.seconds : plan.wakeSeconds || 0) * 1000) {
+      sleep(Number(plan.tickMs || 500)); ticks++;
+      put('progress.txt', `tick ${ticks} at ${new Date().toISOString()}\n`);
+      if (ticks % 4 === 0) put(`ticks/tick-${String(ticks).padStart(3, '0')}.json`, JSON.stringify({ n: ticks }) + '\n');
     }
     verify('at the end');
     const g = (args) => { const r = cp.spawnSync('git', args, { cwd: root, encoding: 'utf8', windowsHide: true }); return r.status === 0 ? String(r.stdout).trim().split(/\r?\n/).filter(Boolean) : null; };
-    rec({ kind: 'wake-end', at: new Date().toISOString(), rid, ticks: n, violations, notes, files: [...mine.keys()].sort(),
+    rec({ kind: 'wake-end', at: new Date().toISOString(), rid, index: n, ticks, violations, notes, files: [...mine.keys()].sort(),
       fetch_head_moved: fetchHead() !== fetchHeadAtStart,
       repo_lock_in_tree: fs.existsSync(path.join(root, 'run', '.repo-lock.deep-r3-trade.json')),
       repo_lock_text: (() => { try { return fs.readFileSync(path.join(root, 'run', '.repo-lock.deep-r3-trade.json'), 'utf8'); } catch (e) { return null; } })(),
       local_log: plan.gitLogs ? g(['log', '--format=%s']) : null,
       origin_log: plan.gitLogs && plan.originDir ? g(['--git-dir', plan.originDir, 'log', '--format=%s', 'main']) : null,
       origin_lock: plan.gitLogs && plan.originDir ? g(['--git-dir', plan.originDir, 'ls-tree', '--name-only', 'main', '--', 'run/.repo-lock.deep-r3-trade.json']) : null });
-    if (!plan.noFinalStatus) {
+    const status = w.status || plan.wakeStatus || 'completed';
+    const code = Number.isInteger(w.exit) ? w.exit : exitOf('wake');
+    if (w.statusAsDir) { fs.mkdirSync(path.join(dir, 'wake-status.json'), { recursive: true }); return say({ outcome: status }, code); }
+    if (!plan.noFinalStatus && !w.noFinalStatus) {
       put('report.md', `# stub report ${rid}\n`);
-      fs.writeFileSync(path.join(dir, 'wake-status.json'), JSON.stringify({ run_id: rid, started_at: started, finished_at: new Date().toISOString(), status: plan.wakeStatus || 'completed', stopped_at_step: null, notes: 'stub wake' }, null, 2) + '\n');
+      fs.writeFileSync(path.join(dir, 'wake-status.json'), JSON.stringify({ run_id: rid, started_at: started, finished_at: w.noFinish ? undefined : new Date().toISOString(), status, stopped_at_step: null, notes: 'stub wake', ...(w.retry ? { retry: w.retry } : {}) }, null, 2) + '\n');
     }
-    return say({ outcome: plan.wakeStatus || 'completed' }, exitOf('wake'));
+    return say({ outcome: status }, code);
   }
 }
 const STUB_TEXT = `'use strict';\n// routine.test.cjs stub planner: stands in for the installed planner.cjs (routine.test.cjs, stubPlanner). No network,\n// no key, no signer; its plan and its records are in ../../stub, outside the project.\n(${stubPlanner.toString()})(require('path').join(__dirname, '..', '..', 'stub'));\n`;
+// THE STUB CHAIN HELPER (toolsDir/chain-helper.cjs in the retry cases): answers `nonce <address>` as its helper-plan.json
+// lists, the i-th call the i-th answer and the last one after that ({ fail: true }: an RPC failure, exit 5); records
+// every call. The quiet wait before a fresh wake of class foreign is the only caller
+function stubHelper(STUB) {
+  const fs = require('fs'); const path = require('path');
+  let plan = {}; try { plan = JSON.parse(fs.readFileSync(path.join(STUB, 'helper-plan.json'), 'utf8')); } catch (e) { plan = {}; }
+  const argv = process.argv.slice(2);
+  const f = path.join(STUB, 'helper-count.txt'); let n = 0; try { n = Number(fs.readFileSync(f, 'utf8')) || 0; } catch (e) { n = 0; } fs.writeFileSync(f, String(n + 1));
+  fs.appendFileSync(path.join(STUB, 'calls.jsonl'), JSON.stringify({ kind: 'helper', at: new Date().toISOString(), argv, n }) + '\n');
+  const seq = Array.isArray(plan.nonce) ? plan.nonce : []; const a = seq.length ? seq[Math.min(n, seq.length - 1)] : null;
+  if (argv[0] !== 'nonce' || argv.length !== 2 || !a || a.fail) { process.stdout.write(JSON.stringify({ error: 'stub helper: no answer scripted', code: 'rpc_unreachable' }) + '\n'); process.exitCode = 5; return; }
+  process.stdout.write(JSON.stringify({ address: argv[1], latest: a.latest, pending: a.pending }) + '\n');
+}
+const HELPER_STUB_TEXT = `'use strict';\n// routine.test.cjs stub chain helper (routine.test.cjs, stubHelper): no RPC; its plan and records are in ../stub.\n(${stubHelper.toString()})(require('path').join(__dirname, '..', 'stub'));\n`;
 
 // =================================================================================================================
 // THE TEST HARNESS
 // =================================================================================================================
 function argOf(name) { const i = process.argv.indexOf(name); return i > 0 && i + 1 < process.argv.length ? process.argv[i + 1] : null; }
 const ARGS = { dir: argOf('--dir'), only: argOf('--only'), ethersFrom: argOf('--ethers-from') };
-const SECTIONS = ['install', 'passthrough', 'clearance', 'gates', 'selftest', 'git'];
+const SECTIONS = ['install', 'passthrough', 'clearance', 'gates', 'selftest', 'retry', 'git'];
 const ONLY = ARGS.only ? new Set(ARGS.only.split(',').map((s) => s.trim())) : null;
 if (ONLY) for (const s of ONLY) if (!SECTIONS.includes(s)) { console.log(`unknown section ${s}; sections: ${SECTIONS.join(', ')}`); process.exit(2); }
 const want = (s) => !ONLY || ONLY.has(s);
@@ -178,6 +211,7 @@ const rj = (p) => JSON.parse(fs.readFileSync(p, 'utf8'));
 const wj = (p, o) => { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, JSON.stringify(o, null, 1) + '\n'); };
 const exists = (p) => fs.existsSync(p);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const until = async (cond, ms, what) => { const t0 = Date.now(); while (!cond()) { if (Date.now() - t0 > ms) throw new Error(`timed out after ${Math.round(ms / 1000)} s waiting for ${what}`); await sleep(250); } };
 const norm = (p) => { const r = path.resolve(p); return isWin ? r.toLowerCase() : r; };
 const isInside = (base, target) => { const b = norm(base); const t = norm(target); return t === b || t.startsWith(b + path.sep); };
 const sameList = (a, b) => JSON.stringify(a) === JSON.stringify(b);
@@ -266,8 +300,9 @@ const calls = (P) => { try { return fs.readFileSync(path.join(P.stub, 'calls.jso
 const plannerCalls = (P) => calls(P).filter((c) => c.kind === 'call');
 const wakeEnd = (P, rid) => calls(P).filter((c) => c.kind === 'wake-end' && c.rid === rid).pop();
 function autonomyOf(P) { return { enabled: true, signer_path: P.signerBin, signer_sha256: shaFile(P.signerBin), planner_path: P.plannerBin, planner_sha256: shaFile(P.plannerBin) }; }
-function setupRecord(P, over = {}) {
-  const rec = { schedule: { time_limit_hours: 6 } };
+function setupRecord(P, over = {}, schedule = {}) {
+  const rec = { schedule: { time_limit_hours: 6, ...schedule } };
+  for (const k of Object.keys(rec.schedule)) if (rec.schedule[k] === undefined) delete rec.schedule[k];
   if (over !== null) { const a = { ...autonomyOf(P), ...over }; for (const k of Object.keys(a)) if (a[k] === undefined) delete a[k]; rec.autonomy = a; }
   wj(P.setupFile, rec);
 }
@@ -530,6 +565,10 @@ async function gatesSection(W) {
       ok(!exists(P.lock), 'the lock was not released');
       ok(rj(path.join(P.run, r.j.run_id, 'wake-status.json')).status === 'completed' && r.j.pushed === null, clip(r.j));
       ok(!(r.stdout + r.stderr).includes(KEY_PASSWORD), 'the password was printed');
+      // one wake: attempts holds it, no fresh wake followed, and the deadline is the wake's (its start + 6 h - 10 min)
+      ok(Array.isArray(r.j.attempts) && r.j.attempts.length === 1 && r.j.attempts[0].run_id === r.j.run_id && r.j.attempts[0].exit === 0 && /^no fresh wake: /.test(r.j.attempts[0].decision || ''), clip(r.j.attempts));
+      ok(r.j.retry_stopped === 'the wake ended without a stop (planner exit 0)', clip(r.j.retry_stopped));
+      ok(c.lock_owner && c.lock_owner.attempt === 1 && c.lock_owner.first_run_id === r.j.run_id && r.j.deadline === new Date(Date.parse(c.lock_owner.started_at) + 6 * 3600000 - 600000).toISOString(), `deadline ${r.j.deadline}, owner ${clip(c.lock_owner)}`);
     } finally { clearRuns(P); setPlan(P, {}); }
   });
   // A cloud session sets CLAUDE_AUTOCOMPACT_PCT_OVERRIDE itself; its name trips the signer's environment tripwire, so
@@ -785,13 +824,246 @@ async function selftestSection(W) {
 }
 
 // =================================================================================================================
+// 7. retry: a fresh wake in the same run (I-setup.md I.2 section 6), without --push: the arm lock alone guards the
+// wakes, as on a machine of one's own, and a changed setup record in the clone ends the loop. The stub planner writes
+// each wake's retry verdict into wake-status.json. A fresh wake waits at least 60 s, so every case that waits runs at
+// once, each in a project of its own, while the cases that never wait run one after another in one more
+// =================================================================================================================
+async function retrySection(W) {
+  const rv = (cls, key, extra = {}) => ({ verdict: 'fresh-wake', class: cls, key, after_s: 1, why: `stub: a ${cls} stop at ${key}`, ...extra });
+  const NONE = { verdict: 'none', class: 'stop', key: 'exec:hash-mismatch', after_s: null, why: 'stub: a safety stop that is never retried' }; // wake.cjs retryVerdict's shape
+  const wakeCalls = (P) => plannerCalls(P).filter((c) => c.argv[0] === 'wake');
+  const helperCalls = (P) => calls(P).filter((c) => c.kind === 'helper');
+  const logOf = (P) => { try { return fs.readFileSync(P.log, 'utf8'); } catch (e) { return ''; } };
+  const minuteOf = (rid) => Date.UTC(+rid.slice(0, 4), +rid.slice(5, 7) - 1, +rid.slice(8, 10), +rid.slice(11, 13), +rid.slice(13, 15));
+  const mk = async (name, wakes, schedule = { fresh_wakes_max: 2 }, nonce = null) => {
+    const P = await stubProject(W, name);
+    setupRecord(P, {}, schedule); setPlan(P, { wakes });
+    if (nonce) { fs.writeFileSync(path.join(P.tools, 'chain-helper.cjs'), HELPER_STUB_TEXT); wj(path.join(P.stub, 'helper-plan.json'), { nonce }); }
+    return P;
+  };
+  let X = null;
+  await test('retry: setup (eleven throwaway projects, each installed, the stub over the planner, a setup record with schedule.fresh_wakes_max)', async () => {
+    const [Q, A, F, G, H, I, J, K, L, M, N] = await Promise.all([
+      mk('retry-quick', []),
+      mk('retry-settle', [{ exit: 4, status: 'aborted', retry: rv('settle', 'repair:pending'), seconds: 1 }, { exit: 0, status: 'traded', seconds: 1 }]),
+      mk('retry-samekey', [{ exit: 3, status: 'aborted', retry: rv('market', 'G:stale-quote'), seconds: 1 }, { exit: 3, status: 'aborted', retry: rv('market', 'G:stale-quote'), seconds: 1 }]),
+      mk('retry-settle2', [{ exit: 3, status: 'aborted', retry: rv('settle', 'repair:pending'), seconds: 1 }, { exit: 3, status: 'aborted', retry: rv('settle', 'repair:not-sent'), seconds: 1 }]),
+      mk('retry-budget', [{ exit: 5, status: 'aborted', retry: rv('transport', 'C:rpc_unreachable'), seconds: 1 }, { exit: 0, status: 'traded', seconds: 1 }], { fresh_wakes_max: 2, time_limit_hours: 0.5 }),
+      mk('retry-minute', [{ exit: 5, status: 'aborted', retry: rv('transport', 'exec:nonce-lag'), seconds: 3 }, { exit: 0, status: 'traded', seconds: 1 }]),
+      mk('retry-install', [{ exit: 3, status: 'aborted', retry: rv('market', 'G:stale-quote'), seconds: 1 }, { exit: 0, status: 'traded', seconds: 15 }]),
+      mk('retry-setup', [{ exit: 3, status: 'aborted', retry: rv('market', 'F:self-check-failed'), seconds: 1, touchSetup: true }]),
+      mk('retry-foreign', [{ exit: 4, status: 'aborted', retry: rv('foreign', 'exec:nonce-moved', { quiet_s: 30 }), seconds: 1 }, { exit: 0, status: 'traded', seconds: 1 }], undefined, [{ latest: 7, pending: 8 }, { latest: 8, pending: 8 }]),
+      mk('retry-noisy', [{ exit: 4, status: 'aborted', retry: rv('foreign', 'exec:pending-transaction', { quiet_s: 30 }), seconds: 1 }], { fresh_wakes_max: 2, time_limit_hours: 0.25 }, [{ latest: 7, pending: 8 }]),
+      // 0.25 h: the deadline 5 min after the start, a sixth of the limit 2.5 min; a wait of 60 s fits once, 2 x 60 s not
+      mk('retry-double', [{ exit: 3, status: 'aborted', retry: rv('market', 'G:stale-quote', { after_s: 60 }), seconds: 1 }, { exit: 3, status: 'aborted', retry: rv('market', 'exec:stale-floor', { after_s: 60 }), seconds: 1 }], { fresh_wakes_max: 2, time_limit_hours: 0.25 }),
+    ]);
+    X = { Q, A, F, G, H, I, J, K, L, M, N };
+  });
+  if (!X) return;
+  const { Q, A, F, G, H, I, J, K, L, M, N } = X;
+  const long = { timeoutMs: 600000 };
+  const R = { A: r3(W, A, ['trade'], long), F: r3(W, F, ['trade'], long), G: r3(W, G, ['trade'], long), H: r3(W, H, ['trade'], long), I: r3(W, I, ['trade'], long),
+    J: r3(W, J, ['trade'], long), K: r3(W, K, ['trade'], long), L: r3(W, L, ['trade'], long), M: r3(W, M, ['trade'], long), N: r3(W, N, ['trade'], long) };
+  // retry-minute: once its first wake runs, both run-ids of the next two minutes are taken, so its fresh wake (60 s
+  // later) finds its minute's slugs taken and must wait into a free one, never stop on "run-id ... is taken"
+  const taken = [];
+  const takeMinutes = (async () => {
+    await until(() => wakeCalls(I).length >= 1, 120000, 'retry-minute\'s first wake');
+    const m1 = minuteOf(wakeCalls(I)[0].argv[1]);
+    for (const ms of [m1 + 60000, m1 + 120000]) for (const s of ['', '-w2']) { const d = path.join(I.run, slugAt(ms) + s); fs.mkdirSync(d, { recursive: true }); taken.push(slugAt(ms) + s); }
+  })().catch((e) => e);
+  // retry-install: an install while the second wake runs
+  const installDuring = (async () => { await until(() => wakeCalls(J).length >= 2, 300000, 'retry-install\'s second wake'); return r3(W, J, ['install']); })().catch((e) => e);
+
+  // ---- the cases that never wait, one after another while the others run
+  const quick = async (label, wakes, schedule, check, env) => {
+    await test(`retry: ${label} -> one wake, no fresh wake`, async () => {
+      setupRecord(Q, {}, schedule || { fresh_wakes_max: 2 }); setPlan(Q, { wakes }); fs.rmSync(path.join(Q.stub, 'wake-count.txt'), { force: true });
+      const n0 = wakeCalls(Q).length;
+      const r = await r3(W, Q, ['trade'], env ? { env } : undefined);
+      try {
+        ok(wakeCalls(Q).length === n0 + 1, `${wakeCalls(Q).length - n0} wakes ran: ${say(r)}`);
+        ok(Array.isArray(r.j.attempts) && r.j.attempts.length === 1 && r.j.attempts[0].run_id === r.j.run_id && /^no fresh wake: /.test(r.j.attempts[0].decision || ''), clip(r.j.attempts));
+        ok(typeof r.j.retry_stopped === 'string' && r.j.attempts[0].decision === `no fresh wake: ${r.j.retry_stopped}`, clip(r.j.retry_stopped));
+        ok(!exists(Q.lock), 'the lock was not released');
+        check(r);
+      } finally { clearRuns(Q); }
+    });
+  };
+  await quick('a recoverable stop with schedule.fresh_wakes_max missing (it means 0)', [{ exit: 4, status: 'aborted', retry: rv('settle', 'repair:pending') }], { fresh_wakes_max: undefined },
+    (r) => ok(r.code === 4 && r.j.exit === 4 && /fresh wakes are off/.test(r.j.retry_stopped) && r.j.attempts[0].retry.class === 'settle', say(r)));
+  await quick('the same with schedule.fresh_wakes_max 0', [{ exit: 4, status: 'aborted', retry: rv('settle', 'repair:pending') }], { fresh_wakes_max: 0 },
+    (r) => ok(r.code === 4 && /fresh wakes are off/.test(r.j.retry_stopped), say(r)));
+  await quick('schedule.fresh_wakes_max 3, not 0, 1 or 2 (no switch at all)', [{ exit: 5, status: 'aborted', retry: rv('transport', 'C:rpc_unreachable') }], { fresh_wakes_max: 3 },
+    (r) => ok(r.code === 5 && /not 0, 1 or 2/.test(r.j.retry_stopped), say(r)));
+  await quick('the planner\'s verdict none (a safety stop)', [{ exit: 4, status: 'aborted', retry: NONE }], undefined,
+    (r) => ok(r.code === 4 && /verdict is none \(stub: a safety stop/.test(r.j.retry_stopped) && r.j.attempts[0].retry.verdict === 'none', say(r)));
+  await quick('no retry field in wake-status.json (deny by default)', [{ exit: 3, status: 'aborted' }], undefined,
+    (r) => ok(r.code === 3 && /verdict is missing/.test(r.j.retry_stopped) && r.j.attempts[0].retry === null, say(r)));
+  await quick('planner exit 1 with a fresh-wake verdict', [{ exit: 1, status: 'aborted', retry: rv('transport', 'C:rpc_unreachable') }], undefined,
+    (r) => ok(r.code === 1 && r.j.exit === 1 && /planner exit 1 is never retried/.test(r.j.retry_stopped), say(r)));
+  await quick('planner exit 2 with a fresh-wake verdict', [{ exit: 2, status: 'aborted', retry: rv('transport', 'C:rpc_unreachable') }], undefined,
+    (r) => ok(r.code === 2 && /planner exit 2 is never retried/.test(r.j.retry_stopped), say(r)));
+  await quick('a wake that wrote its verdict but not its final write (no finished_at: a signal after the start marker)', [{ exit: 3, status: 'aborted', retry: rv('market', 'G:stale-quote'), noFinish: true }], undefined, (r) => {
+    ok(r.code === 3 && /without its final write/.test(r.j.retry_stopped), say(r));
+    const ws = rj(path.join(Q.run, r.j.run_id, 'wake-status.json'));
+    ok(ws.status === 'aborted' && ws.finished_at && !ws.retry && /without its final write/.test(ws.notes || ''), `the wrapper's own final status was not written: ${clip(ws)}`);
+  });
+  await quick('planner exit 4 with class market (exit 4 is retried only for settle or foreign)', [{ exit: 4, status: 'aborted', retry: rv('market', 'G:stale-quote') }], undefined,
+    (r) => ok(r.code === 4 && /retried only for class settle or foreign/.test(r.j.retry_stopped), say(r)));
+  await quick('status no-csv with a transport verdict (nothing to trade on)', [{ exit: 5, status: 'no-csv', retry: rv('transport', 'D:no-csv') }], undefined,
+    (r) => ok(r.code === 5 && r.j.status === 'no-csv' && /status no-csv/.test(r.j.retry_stopped), say(r)));
+  await quick('class foreign without quiet_s (a malformed verdict)', [{ exit: 4, status: 'aborted', retry: rv('foreign', 'exec:nonce-moved') }], undefined,
+    (r) => ok(r.code === 4 && /malformed/.test(r.j.retry_stopped) && helperCalls(Q).length === 0, say(r)));
+  await quick('time_limit_hours 0.15 (the wait and 1/6 of the limit do not fit before the deadline)', [{ exit: 5, status: 'aborted', retry: rv('transport', 'C:rpc_unreachable') }], { fresh_wakes_max: 2, time_limit_hours: 0.15 },
+    (r) => ok(r.code === 5 && /^no time: a fresh wake after 60 s would leave less than 2 min before the deadline /.test(r.j.retry_stopped), say(r)));
+  // the deadline 2 min after the start: the 60 s wait fits, the wait plus 1/6 of the limit (2 min) does not
+  await quick('time_limit_hours 0.2 (the wait fits before the deadline, the wait and 1/6 of the limit do not)', [{ exit: 5, status: 'aborted', retry: rv('transport', 'C:rpc_unreachable') }], { fresh_wakes_max: 2, time_limit_hours: 0.2 },
+    (r) => ok(r.code === 5 && /^no time: a fresh wake after 60 s would leave less than 2 min before the deadline /.test(r.j.retry_stopped), say(r)));
+  // the deadline 5 min after the start: 1/6 of the limit (2.5 min) fits, the verdict's 180 s wait and it do not
+  await quick('time_limit_hours 0.25 with after_s 180 (1/6 of the limit fits before the deadline, the wait and it do not)', [{ exit: 3, status: 'aborted', retry: rv('market', 'G:stale-quote', { after_s: 180 }) }], { fresh_wakes_max: 2, time_limit_hours: 0.25 },
+    (r) => ok(r.code === 3 && /^no time: a fresh wake after 180 s would leave less than 3 min before the deadline /.test(r.j.retry_stopped), say(r)));
+  // the Bash tool's limit before the deadline (a lock that took long to take): the loop ends at the earlier of the two
+  await quick('BASH_MAX_TIMEOUT_MS 4 min, time_limit_hours 0.5 (the deadline 20 min away, the Bash tool\'s limit 4 min)', [{ exit: 5, status: 'aborted', retry: rv('transport', 'C:rpc_unreachable') }], { fresh_wakes_max: 2, time_limit_hours: 0.5 },
+    (r) => {
+      ok(r.code === 5 && /^no time: a fresh wake after 60 s would leave less than 5 min before the Bash tool's limit /.test(r.j.retry_stopped), say(r));
+      const ahead = Date.parse(r.j.deadline) - Date.parse(r.j.attempts[0].started_at); // the line's deadline stays the planner's
+      ok(ahead > 19 * 60000 && ahead <= 20 * 60000, `deadline ${r.j.deadline}, ${ahead} ms after the wake started`);
+    }, { BASH_MAX_TIMEOUT_MS: '240000' });
+
+  // ---- the contract between the planner and the wrapper: the verdicts the real planner writes (planner/wake.cjs
+  // retryVerdict, over stops built by its own exec-core xstop, lib.Stop and lib.failureSummary), each with the exit code
+  // the wake gives that stop, reach decideRetry well formed and allowed: with time_limit_hours 0.15 every one of them ends
+  // on the time check, the last rule, never on "malformed", an exit rule or a missing field; the line carries the verdict
+  // exactly as the planner wrote it. A safety stop's verdict none ends on the verdict rule.
+  const WK = require(path.join(SCRIPTS, 'planner', 'wake.cjs')); const XC = require(path.join(SCRIPTS, 'planner', 'exec-core.cjs')); const PL = require(path.join(SCRIPTS, 'planner', 'lib.cjs'));
+  // a Half A stop as wake.run holds it: the step's summary (lib.runStep: subcommand, run_id, exit, then failureSummary's fields)
+  const halfA = (sub, step, stop) => { const f = PL.failureSummary(stop, sub); return { step, summary: { subcommand: sub, run_id: 'contract', exit: f.exit, ...f.fields }, keep_aborted: !!f.fields.keep_aborted || [4, 5].includes(f.exit) }; };
+  // Half B's stop as wake.run holds it (W.steps.halfb)
+  const halfB = (stop) => { const f = PL.failureSummary(stop, 'halfb'); return { subcommand: 'halfb', run_id: 'contract', exit: f.exit, ...f.fields }; };
+  const verdictOf = (o) => WK.retryVerdict({ W: { status: 'aborted', steps: {} }, rep: { blockSends: null, blockKind: null, recovered: [], chainMismatch: [] }, ...o });
+  // wake.run: the worst exit of Half A's stop, a G cut (3) and Half B's stop, else 3
+  const exitOf = (o) => { const e = Math.max(o.haStop ? o.haStop.summary.exit || 3 : 0, o.haCut ? 3 : 0, o.hb ? o.hb.exit || 0 : 0); return [3, 4, 5].includes(e) ? e : 3; };
+  const hbPending = () => halfB(new PL.Stop({ step: 'B', cause: 'pending', status: 'aborted', exit: PL.EXIT.SAFETY, notes: 'contract', fields: { keep_aborted: true, half_b_stop: { kind: 'pending', group: 'g1', another_sender: false, transient: false, settlement: 'pending' } } }));
+  const CONTRACT = [
+    ['transport: exec stopped nonce-lag (the lag outlasted the re-reads)', { haStop: halfA('exec', 'exec', new PL.Stop({ step: 'G', cause: 'nonce-lag', status: 'aborted', exit: PL.EXIT.TRANSPORT, notes: 'contract', fields: { transport: true } })) }],
+    ['market: G stopped stale-quote', { haStop: halfA('g', 'G', new PL.Stop({ step: 'G', cause: 'stale-quote', status: 'aborted', notes: 'contract' })) }],
+    ['market: a send whose RPC failed before signing past its re-entries', { haStop: halfA('exec', 'exec', XC.xstop('G', 'signer-refused', 'contract', { pre_broadcast_refusal: true, transient: true, pre_sign_retries: 3 })) }],
+    ['settle: the start-of-run repair left a nonce Pending', { rep: { blockSends: 'run r0 nonce 7 is Pending', blockKind: 'pending', recovered: [], chainMismatch: [] }, haStop: { step: 'G', summary: { stop: { cause: 'sends-blocked', notes: 'contract' } }, keep_aborted: true } }],
+    ['settle: exec stopped pending', { haStop: halfA('exec', 'exec', XC.xstop('G', 'pending', 'contract', { keep_aborted: true })) }],
+    ['foreign: exec stopped nonce-moved on a read at or above the floor', { haStop: halfA('exec', 'exec', XC.xstop('G', 'nonce-moved', 'contract', { foreign: true })) }],
+    // two stops: the wake exits 4 (Half B's), and the class follows the stop of exit 4
+    ['settle: exec stopped stale-balance, then Half B left its own send Pending', { haStop: halfA('exec', 'exec', XC.xstop('G', 'stale-balance', 'contract')), hb: hbPending() }],
+    ['settle: C stopped onchain-reads-failed, then Half B left its own send Pending', { haStop: halfA('c', 'C', new PL.Stop({ step: 'C', cause: 'onchain-reads-failed', status: 'aborted', notes: 'contract' })), hb: hbPending() }],
+    ['settle: G cut its plan, then Half B left its own send Pending', { haCut: { reason: 'contract' }, hb: hbPending() }],
+  ];
+  for (const [what, o] of CONTRACT) {
+    const v = verdictOf(o); const exit = exitOf(o);
+    await quick(`contract, ${what}: the real planner's verdict {${v.verdict}, ${v.class}, ${v.key}, after ${v.after_s} s${v.quiet_s ? `, quiet ${v.quiet_s} s` : ''}} with planner exit ${exit} is allowed and ends on the time check`, [{ exit, status: 'aborted', retry: v }], { fresh_wakes_max: 2, time_limit_hours: 0.15 }, (r) => {
+      ok(v.verdict === 'fresh-wake', `the planner's verdict: ${clip(v)}`);
+      ok(r.code === exit && new RegExp(`^no time: a fresh wake after ${Math.max(60, v.after_s)} s would leave`).test(r.j.retry_stopped || ''), say(r));
+      const a = r.j.attempts[0].retry;
+      ok(a && ['verdict', 'class', 'key', 'after_s', 'quiet_s', 'why'].every((k) => a[k] === v[k]), `the line's verdict ${clip(a)}, the planner's ${clip(v)}`);
+    });
+  }
+  {
+    const o = { haStop: halfA('exec', 'exec', XC.xstop('G', 'hash-mismatch', 'contract', { keep_aborted: true })) }; const v = verdictOf(o);
+    await quick(`contract, a safety stop (exec hash-mismatch): the real planner's verdict {${v.verdict}, ${v.class}, ${v.key}} with planner exit ${exitOf(o)} ends on the verdict rule`, [{ exit: exitOf(o), status: 'aborted', retry: v }], { fresh_wakes_max: 2, time_limit_hours: 0.15 },
+      (r) => ok(v.verdict === 'none' && r.code === 4 && /^the planner's verdict is none \(/.test(r.j.retry_stopped || '') && r.j.attempts[0].retry.key === 'exec:hash-mismatch', say(r)));
+  }
+
+  // ---- the cases that wait
+  const res = {}; for (const k of Object.keys(R)) res[k] = await R[k];
+  console.log(`      (retry runs: ${Object.entries(res).map(([k, r]) => `${k} ${Math.round(r.ms / 1000)} s`).join(', ')}, started together)`);
+  await test('retry: a settle stop (exit 4) then a traded wake, fresh_wakes_max 2 -> two wakes, a new run-id, the same pid and first started_at in owner.txt, the line the last wake\'s with both in attempts', async () => {
+    const r = res.A; const ws = wakeCalls(A);
+    ok(r.code === 0 && r.j.ok === true && r.j.exit === 0 && r.j.planner_exit === 0 && r.j.status === 'traded', say(r));
+    ok(ws.length === 2, `${ws.length} wakes ran`);
+    const [w1, w2] = ws; const [r1, r2] = [w1.argv[1], w2.argv[1]];
+    ok(RID_RE.test(r1) && RID_RE.test(r2) && r1 !== r2, `run-ids ${r1} ${r2}`);
+    ok(w1.lock_owner && w1.lock_owner.run_id === r1 && w1.lock_owner.attempt === 1 && w1.lock_owner.first_run_id === r1, clip(w1.lock_owner));
+    ok(w2.lock_owner && w2.lock_owner.run_id === r2 && w2.lock_owner.stage === 'claude-p' && w2.lock_owner.attempt === 2 && w2.lock_owner.first_run_id === r1, `the second wake's owner.txt: ${clip(w2.lock_owner)}`);
+    ok(w2.lock_owner.pid === w1.lock_owner.pid && w2.lock_owner.started_at === w1.lock_owner.started_at, `owner.txt took a new pid or started_at (a new deadline): ${clip([w1.lock_owner, w2.lock_owner])}`);
+    ok(r.j.run_id === r2 && r.j.report === `run/${r2}/report.md`, `the line names ${r.j.run_id}, not the last wake`);
+    ok(r.j.deadline === new Date(Date.parse(w1.lock_owner.started_at) + 6 * 3600000 - 600000).toISOString(), `deadline ${r.j.deadline}`);
+    const [a1, a2] = r.j.attempts || [];
+    ok(r.j.attempts.length === 2 && a1.run_id === r1 && a1.planner_exit === 4 && a1.exit === 4 && a1.status === 'aborted' && a1.retry && a1.retry.class === 'settle' && a1.retry.key === 'repair:pending', clip(a1));
+    ok(/^a fresh wake after 60 s: class settle, repair:pending$/.test(a1.decision || ''), `decision ${a1.decision}`);
+    ok(a2.run_id === r2 && a2.planner_exit === 0 && a2.exit === 0 && a2.status === 'traded' && /^no fresh wake: /.test(a2.decision || '') && r.j.retry_stopped === 'the wake ended without a stop (planner exit 0)', clip(a2));
+    ok(Date.parse(a2.started_at) - Date.parse(a1.finished_at) >= 59000, `the fresh wake started ${Date.parse(a2.started_at) - Date.parse(a1.finished_at)} ms after the first ended, not 60 s`);
+    ok(rj(path.join(A.run, r1, 'wake-status.json')).retry.class === 'settle' && rj(path.join(A.run, r2, 'wake-status.json')).status === 'traded', 'the wakes\' own statuses');
+    ok(!exists(A.lock) && r.j.pushed === null, 'the lock was not released');
+    ok(new RegExp(`run ${r2}: planner wake started \\(wake 2 of the run ${r1}\\)`).test(logOf(A)), 'the log does not name the fresh wake');
+  });
+  await test('retry: the same key twice -> two wakes, then none (the same stop as the wake before)', async () => {
+    const r = res.F;
+    ok(r.code === 3 && wakeCalls(F).length === 2 && r.j.attempts.length === 2 && r.j.run_id === r.j.attempts[1].run_id, say(r));
+    ok(/^the same stop as the wake before \(G:stale-quote\)/.test(r.j.retry_stopped || ''), clip(r.j.retry_stopped));
+  });
+  await test('retry: two settle verdicts (different keys) -> one settle retry: two wakes', async () => {
+    const r = res.G;
+    ok(r.code === 3 && wakeCalls(G).length === 2 && r.j.attempts.length === 2, say(r));
+    ok(/^one settle retry per run, already used/.test(r.j.retry_stopped || ''), clip(r.j.retry_stopped));
+  });
+  await test('retry: time_limit_hours 0.5 leaves room for one fresh wake (60 s, then 5 min of room before start + 20 min)', async () => {
+    const r = res.H; const ws = wakeCalls(H);
+    ok(r.code === 0 && ws.length === 2 && r.j.attempts.length === 2 && r.j.attempts[0].retry.class === 'transport', say(r));
+    ok(r.j.deadline === new Date(Date.parse(ws[0].lock_owner.started_at) + 0.5 * 3600000 - 600000).toISOString(), `deadline ${r.j.deadline}`);
+  });
+  await test('retry: the wait doubles with each fresh wake: at time_limit_hours 0.25 a second fresh wake after 2 x 60 s no longer fits (one after 60 s would) -> two wakes', async () => {
+    const r = res.N; const ws = wakeCalls(N);
+    ok(r.code === 3 && ws.length === 2 && r.j.attempts.length === 2 && /^a fresh wake after 60 s: /.test(r.j.attempts[0].decision || '') && /^no time: a fresh wake after 120 s would leave less than 3 min before the deadline /.test(r.j.retry_stopped || ''), say(r));
+  });
+  await test('retry: a fresh wake whose minute has both run-ids taken waits into the next free minute: no "run-id ... is taken", a new run-id', async () => {
+    const r = res.I; const tk = await takeMinutes;
+    ok(!(tk instanceof Error), `could not take the minutes: ${tk && tk.message}`);
+    ok(r.code === 0 && r.j.status === 'traded' && wakeCalls(I).length === 2, say(r));
+    const r2 = wakeCalls(I)[1].argv[1];
+    ok(taken.length === 4 && !taken.includes(r2) && r2 !== wakeCalls(I)[0].argv[1], `the fresh wake took ${r2} (taken: ${taken.join(', ')})`);
+    ok(!/is taken/.test(r.stdout) && /is taken: the fresh wake waits into the next minute/.test(logOf(I)), 'the log does not show the wait into the next minute');
+    for (const d of taken) rmrf(path.join(I.run, d));
+  });
+  await test('retry: an install while the fresh wake runs -> exit 2 lock-held naming the second run-id, nothing rewritten; the run then ends normally', async () => {
+    const ins = await installDuring; const r = res.J;
+    ok(!(ins instanceof Error), `no second wake to install under: ${ins && ins.message}`);
+    const r2 = wakeCalls(J)[1].argv[1];
+    ok(ins.code === 2 && ins.j.status === 'lock-held' && new RegExp(`run ${r2}`).test(ins.j.error || ''), say(ins));
+    ok(fs.readFileSync(J.plannerBin, 'utf8') === STUB_TEXT, 'install rewrote the planner under the fresh wake');
+    ok(r.code === 0 && r.j.run_id === r2 && r.j.attempts.length === 2, say(r));
+  });
+  await test('retry: the setup record changed in the clone during the first wake -> no fresh wake after the wait, retry_stopped says so', async () => {
+    const r = res.K;
+    ok(r.code === 3 && wakeCalls(K).length === 1 && r.j.attempts.length === 1, say(r));
+    ok(/^run\/setup\.deep-r3-trade\.json changed in this clone since the run started/.test(r.j.retry_stopped || '') && /^waited 60 s for a fresh wake \(class market, F:self-check-failed\), then none: /.test(r.j.attempts[0].decision || ''), clip(r.j.attempts[0]));
+    ok(!exists(K.lock), 'the lock was not released');
+  });
+  await test('retry: class foreign (another sender) -> the wallet\'s nonce read until latest == pending stays unchanged for quiet_s, then the fresh wake', async () => {
+    const r = res.L; const hc = helperCalls(L); const ws = wakeCalls(L);
+    ok(r.code === 0 && ws.length === 2 && r.j.attempts.length === 2, say(r));
+    ok(/^a fresh wake after 60 s and 30 s of quiet at the wallet: class foreign, exec:nonce-moved$/.test(r.j.attempts[0].decision || ''), clip(r.j.attempts[0].decision));
+    ok(hc.length === 3 && hc.every((c) => sameList(c.argv, ['nonce', HOLDER])), `the helper was read ${hc.length} times: ${clip(hc.map((c) => c.argv))}`);
+    ok(Date.parse(hc[2].at) - Date.parse(hc[1].at) >= 29000 && Date.parse(ws[1].at) >= Date.parse(hc[2].at), `the reads ${clip(hc.map((c) => c.at))}, the fresh wake ${ws[1].at}`);
+    ok(/the wallet is quiet: nonce 8 unchanged for 3\d s \(3 reads\)/.test(logOf(L)), 'the log does not say the wallet was quiet');
+  });
+  await test('retry: class foreign while the wallet never goes quiet -> the quiet wait gives up when a fresh wake would not fit before the deadline, one wake', async () => {
+    const r = res.M;
+    ok(r.code === 4 && wakeCalls(M).length === 1 && r.j.attempts.length === 1, say(r));
+    ok(/^the wallet did not stay quiet for 30 s .* before the deadline .*the last latest 7 pending 8\)$/.test(r.j.retry_stopped || '') && helperCalls(M).length >= 2, `${helperCalls(M).length} reads: ${clip(r.j.retry_stopped)}`);
+  });
+}
+
+// =================================================================================================================
 // 1. the run records in git: checkpoints never change the working tree; the final push rebases
 // =================================================================================================================
 async function gitSection(W) {
   const RECORD_EXCLUDED = /^run\/(\.lock\.deep-r3-trade\/|[^/]+\/(exec|f|g|halfb|recovery)-tmp\/)/;
   const FOREIGN = 'other-clone.txt';
-  const setupGit = async (name, plan, foreign) => {
+  // plan may be a function of the project (a wake's foreignPush names its second clone); schedule goes into the setup
+  // record before the first commit, so the clone stays clean for the repository lock
+  const setupGit = async (name, plan, foreign, schedule) => {
     const P = await stubProject(W, name);
+    if (schedule) setupRecord(P, {}, schedule);
     P.origin = path.join(P.base, 'origin.git'); P.clone2 = path.join(P.base, 'clone2');
     fs.writeFileSync(path.join(P.proj, '.gitignore'), 'run/\n'); // as the real repository: run/ is ignored and added with -f
     fs.writeFileSync(path.join(P.proj, 'README.md'), `throwaway project ${name} (routine.test.cjs)\n`);
@@ -803,7 +1075,7 @@ async function gitSection(W) {
     git(W, P.proj, ['remote', 'add', 'origin', P.origin]);
     git(W, P.proj, ['push', '-q', 'origin', 'HEAD:main']);
     git(W, P.base, ['clone', '-q', P.origin, P.clone2]);
-    setPlan(P, { gitLogs: true, originDir: P.origin, foreignFile: FOREIGN, ...(foreign ? { foreignPush: { dir: P.clone2, kind: foreign, file: FOREIGN } } : {}), ...plan });
+    setPlan(P, { gitLogs: true, originDir: P.origin, foreignFile: FOREIGN, ...(foreign ? { foreignPush: { dir: P.clone2, kind: foreign, file: FOREIGN } } : {}), ...(typeof plan === 'function' ? plan(P) : plan) });
     return P;
   };
   const originLog = (P) => gitLines(W, P.base, ['--git-dir', P.origin, 'log', '--format=%s', 'main']);
@@ -1098,6 +1370,137 @@ async function gitSection(W) {
     refusedCleanly(P, r, n0, 'dirty');
     ok(originHead(P) === before, 'origin moved');
   });
+
+  // ---- fresh wakes with --push (I-setup.md I.2 section 6): both locks held across the wakes, the records pushed after
+  // each wake without a pull, origin fetched (never merged) and checked before the next. Four runs at once, each
+  // waiting 60 s before its fresh wake
+  const rv = (cls, key) => ({ verdict: 'fresh-wake', class: cls, key, after_s: 1, why: `stub: a ${cls} stop at ${key}` });
+  const FRESH = { fresh_wakes_max: 2 };
+  let F2 = null;
+  await test('git: setup (four projects with fresh wakes on, and another clone of the first one\'s origin for a trade now)', async () => {
+    const [fresh, code, setup, thrown] = await Promise.all([
+      setupGit('git-fresh', { wakes: [{ exit: 4, status: 'aborted', retry: rv('settle', 'repair:pending'), seconds: 1 }, { exit: 0, status: 'traded', seconds: 12 }] }, null, FRESH),
+      setupGit('git-fresh-code', (P) => ({ wakes: [{ exit: 3, status: 'aborted', retry: rv('market', 'G:stale-quote'), seconds: 1, foreignPush: { dir: P.clone2, kind: 'file', file: 'code-change.txt' } }] }), null, FRESH),
+      setupGit('git-fresh-setup', (P) => ({ wakes: [{ exit: 3, status: 'aborted', retry: rv('market', 'G:stale-quote'), seconds: 1, foreignPush: { dir: P.clone2, kind: 'setup' } }] }), null, FRESH),
+      setupGit('git-fresh-throw', { wakes: [{ exit: 3, status: 'aborted', retry: rv('market', 'G:stale-quote'), seconds: 1 }, { statusAsDir: true, seconds: 1 }] }, null, FRESH),
+    ]);
+    // a trade now is another clone of the same origin with its own routine.cjs; it stops at the repository lock, before
+    // any install would matter
+    const now = makeProject(W, 'git-fresh-now');
+    git(W, now.proj, ['init', '-q']); git(W, now.proj, ['remote', 'add', 'origin', fresh.origin]);
+    git(W, now.proj, ['fetch', '-q', 'origin', 'main']); git(W, now.proj, ['checkout', '-q', '-f', '-B', 'main', 'FETCH_HEAD']);
+    F2 = { fresh, code, setup, thrown, now };
+  });
+  if (!F2) return;
+  const RF = {}; for (const k of ['fresh', 'code', 'setup', 'thrown']) RF[k] = r3(W, F2[k], ['trade', '--push'], { timeoutMs: 600000 });
+  const nowDuring = (async () => { await until(() => wakesIn(F2.fresh) >= 2, 300000, 'git-fresh\'s second wake'); return r3(W, F2.now, ['trade', '--push']); })().catch((e) => e);
+  for (const k of Object.keys(RF)) RF[k] = await RF[k];
+  console.log(`      (git fresh-wake runs: ${Object.entries(RF).map(([k, r]) => `${k} ${Math.round(r.ms / 1000)} s`).join(', ')}, started together)`);
+  const wakeIds = (P) => plannerCalls(P).filter((c) => c.argv[0] === 'wake').map((c) => c.argv[1]);
+  await test('git: a fresh wake with --push: during it origin holds "attempt 1 ended ... a fresh wake follows in this run" and still the first run\'s repository lock; a trade now then stops lock-held naming the first run-id; the final push removes the lock', async () => {
+    const P = F2.fresh; const r = RF.fresh; const [r1, r2] = wakeIds(P);
+    ok(r.code === 0 && r.j.status === 'traded' && wakeIds(P).length === 2 && r.j.attempts.length === 2 && r.j.run_id === r2, say(r));
+    const end2 = wakeEnd(P, r2);
+    ok(end2 && Array.isArray(end2.origin_log) && end2.origin_log.includes(`records: run ${r1} attempt 1 ended (aborted), exit 4; a fresh wake follows in this run`), `origin during the fresh wake: ${clip(end2 && end2.origin_log)}`);
+    ok(sameList(end2.origin_lock, [LOCK_GIT]) && end2.repo_lock_in_tree === true && JSON.parse(end2.repo_lock_text).run_id === r1, `the first run's repository lock was not held through the fresh wake: ${clip(end2)}`);
+    ok(end2.fetch_head_moved === false && sameList(end2.violations, []), `a fetch ran, or files moved, during the fresh wake: ${clip(end2)}`);
+    const now = await nowDuring;
+    ok(!(now instanceof Error), `no fresh wake to trade now under: ${now && now.message}`);
+    ok(now.code === 2 && now.j.status === 'lock-held' && now.j.holder && now.j.holder.run_id === r1 && now.j.run_id === undefined && !exists(F2.now.lock), `a trade now during the fresh wake: ${say(now)}`);
+    const log = originLog(P);
+    ok(log[0] === `records: run ${r2} finished (traded), exit 0; wake 2 of the run ${r1}` && log.filter((s) => /^lock: run /.test(s)).length === 1, `origin ${clip(log)}`);
+    ok(!originTree(P).includes(LOCK_GIT) && !exists(path.join(P.run, '.repo-lock.deep-r3-trade.json')) && r.j.repo_lock && r.j.repo_lock.run_id === r1 && r.j.repo_lock.released === true, `the repository lock was left: ${clip(r.j.repo_lock)}`);
+    ok(!exists(P.lock), 'the arm lock was not released');
+  });
+  await test('git: a commit outside run/ pushed to origin during the first wake -> no fresh wake, retry_stopped names the commit; the final push carries the records and removes the lock', async () => {
+    const P = F2.code; const r = RF.code;
+    const fp = calls(P).find((c) => c.kind === 'foreign-push'); ok(fp && fp.ok, `the other clone's push did not land: ${clip(fp)}`);
+    ok(r.code === 3 && wakeIds(P).length === 1 && r.j.attempts.length === 1, say(r));
+    ok(/^origin's main has a commit outside run\/ since this run started \(\w+ other clone: a commit pushed while the run lasts\)/.test(r.j.retry_stopped || ''), clip(r.j.retry_stopped));
+    ok(r.j.pushed && r.j.pushed.pushed === true && !originTree(P).includes(LOCK_GIT) && r.j.repo_lock.released === true, clip(r.j));
+  });
+  await test('git: the setup record changed on origin during the first wake (an operator\'s pause) -> no fresh wake, retry_stopped names it', async () => {
+    const P = F2.setup; const r = RF.setup;
+    const fp = calls(P).find((c) => c.kind === 'foreign-push'); ok(fp && fp.ok, `the other clone's push did not land: ${clip(fp)}`);
+    ok(r.code === 3 && wakeIds(P).length === 1, say(r));
+    ok(/^run\/setup\.deep-r3-trade\.json changed on origin since this run started/.test(r.j.retry_stopped || ''), clip(r.j.retry_stopped));
+    ok(r.j.repo_lock && r.j.repo_lock.released === true, clip(r.j.repo_lock));
+  });
+  await test('git: an internal error in the fresh wake (its final status cannot be written) releases both locks, pushes the records, and the error line carries attempts', async () => {
+    const P = F2.thrown; const r = RF.thrown; const [r1, r2] = wakeIds(P);
+    ok(r.code === 1 && r.j.ok === false && r.j.exit === 1 && /EISDIR|EPERM|EACCES/.test(r.j.error || ''), say(r));
+    ok(Array.isArray(r.j.attempts) && r.j.attempts.length === 2, clip(r.j.attempts));
+    const [a1, a2] = r.j.attempts;
+    ok(a1.run_id === r1 && a1.exit === 3 && /^a fresh wake after 60 s/.test(a1.decision || '') && a2.run_id === r2 && a2.started_at && a2.finished_at === undefined, clip(r.j.attempts));
+    ok(!exists(P.lock), 'the arm lock was left');
+    ok(originLog(P)[0] === `records: run ${r2} ended on an internal error` && !originTree(P).includes(LOCK_GIT), `origin ${clip(originLog(P))}`);
+  });
+
+  // ---- the wrapper's own git steps, tried again (a fetch, a lock push, the final push); access refusals at once
+  const fwd = (p) => p.replace(/\\/g, '/');
+  // a hook's clock in ms: this node, so it reads the same on every system (BSD date has no %N)
+  const stamp = `"${fwd(process.execPath)}" -e "process.stdout.write(Date.now() + '\\n')"`;
+  const prePush = (P, lines) => { const h = path.join(P.proj, '.git', 'hooks', 'pre-push'); fs.mkdirSync(path.dirname(h), { recursive: true }); fs.writeFileSync(h, lines.join('\n')); if (!isWin) fs.chmodSync(h, 0o755); };
+  await test('git: a fetch that fails (origin away for 6 s) is tried again 10 s later: the run takes the lock and trades', async () => {
+    const P = await setupGit('git-p9-fetch', { wakeSeconds: 1 });
+    const away = P.origin + '-away'; fs.renameSync(P.origin, away);
+    const run = r3(W, P, ['trade', '--push']);
+    await sleep(6000); fs.renameSync(away, P.origin);
+    const r = await run;
+    ok(r.code === 0 && r.j.status === 'completed' && r.j.repo_lock && r.j.repo_lock.released === true, say(r));
+    ok(r.ms >= 9000, `the run took ${r.ms} ms: the failed fetch was not tried again after 10 s`);
+  });
+  await test('git: a lock push the server refuses once (a pre-push hook) is tried again 2 s later: the run takes the lock once and trades', async () => {
+    const P = await setupGit('git-p9-lockpush', { wakeSeconds: 1 });
+    const done = fwd(path.join(P.base, 'refused-once')); const times = path.join(P.base, 'push-times');
+    prePush(P, ['#!/bin/sh', `${stamp} >> "${fwd(times)}"`, `[ -f "${done}" ] && exit 0`, `: > "${done}"`, 'echo "remote: simulated 502 Bad Gateway" >&2', 'exit 1', '']);
+    const r = await r3(W, P, ['trade', '--push']);
+    ok(exists(done), `the pre-push hook never ran: ${say(r)}`);
+    const t = fs.readFileSync(times, 'utf8').trim().split(/\s+/).map(Number);
+    ok(t.length >= 2 && t[1] - t[0] >= 1900, `the refused lock push was tried again ${t[1] - t[0]} ms later, not after 2 s (${t.join(', ')})`);
+    ok(r.code === 0 && r.j.status === 'completed' && r.j.repo_lock && r.j.repo_lock.released === true, say(r));
+    const log = originLog(P);
+    ok(log.filter((s) => /^lock: run /.test(s)).length === 1 && log.includes(`lock: run ${r.j.run_id} started`), `origin's lock commits: ${clip(log)}`);
+  });
+  await test('git: a lock push refused for access (denied, 403) stops at once: exit 2 lock-unavailable, one push, no lock commit left, the wake never starts', async () => {
+    const P = await setupGit('git-p9-denied', { wakeSeconds: 1 });
+    const count = path.join(P.base, 'push-count');
+    prePush(P, ['#!/bin/sh', `echo x >> "${fwd(count)}"`, 'echo "remote: Permission to owner/trading.git denied to routine-test." >&2', 'echo "fatal: unable to access: The requested URL returned error: 403" >&2', 'exit 1', '']);
+    const n0 = wakesIn(P); const before = originHead(P);
+    const r = await r3(W, P, ['trade', '--push']);
+    ok(r.code === 2 && r.j.status === 'lock-unavailable' && /^the lock push was refused: /.test(r.j.notes || ''), say(r));
+    ok(fs.readFileSync(count, 'utf8').trim().split(/\s+/).length === 1, 'the refused push was tried again');
+    refusedCleanly(P, r, n0, 'denied');
+    ok(originHead(P) === before && head(P.proj) === before && !exists(path.join(P.run, '.repo-lock.deep-r3-trade.json')), 'the lock commit or file was left in the clone, or origin moved');
+  });
+  await test('git: a final push the server refuses once is tried again 5 s later: pushed, the repository lock removed', async () => {
+    const P = await setupGit('git-p9-final', { wakeSeconds: 1 });
+    const done = fwd(path.join(P.base, 'final-refused-once')); const times = path.join(P.base, 'final-times');
+    prePush(P, ['#!/bin/sh', 'while read lref lsha rref rsha; do', '  s=$(git log -1 --format=%s "$lsha")', '  case "$s" in "records: run "*" finished ("*)', `    ${stamp} >> "${fwd(times)}"`,
+      `    if [ ! -f "${done}" ]; then : > "${done}"; echo "remote: simulated 503 Service Unavailable" >&2; exit 1; fi ;;`, '  esac', 'done', 'exit 0', '']);
+    const r = await r3(W, P, ['trade', '--push']);
+    ok(exists(done), `the final push was never refused: ${say(r)}`);
+    ok(r.code === 0 && r.j.pushed && r.j.pushed.pushed === true && r.j.repo_lock && r.j.repo_lock.released === true, say(r));
+    ok(originLog(P)[0] === `records: run ${r.j.run_id} finished (completed), exit 0` && !originTree(P).includes(LOCK_GIT), `origin ${clip(originLog(P))}`);
+    const t = fs.readFileSync(times, 'utf8').trim().split(/\s+/).map(Number);
+    ok(t.length === 2 && t[1] - t[0] >= 4900, `the refused final push was tried again ${t[1] - t[0]} ms later, not after 5 s (${t.join(', ')})`);
+  });
+  await test('git: the final push meets an outage (refused, then origin away for 8 s, so the pull 5 s later fails too): the pull is tried again like the push, 15 s later, and the records are pushed', async () => {
+    const P = await setupGit('git-p9-outage', { wakeSeconds: 1 });
+    const done = fwd(path.join(P.base, 'final-refused-once'));
+    prePush(P, ['#!/bin/sh', 'while read lref lsha rref rsha; do', '  s=$(git log -1 --format=%s "$lsha")', '  case "$s" in "records: run "*" finished ("*)',
+      `    if [ ! -f "${done}" ]; then : > "${done}"; echo "remote: simulated 502 Bad Gateway" >&2; exit 1; fi ;;`, '  esac', 'done', 'exit 0', '']);
+    const run = r3(W, P, ['trade', '--push']);
+    for (let i = 0; i < 1800 && !exists(done); i++) await sleep(100); // the first final push, refused
+    const away = P.origin + '-away';
+    const mv = async (a, b) => { for (let i = 0; ; i++) { try { fs.renameSync(a, b); return; } catch (e) { if (i >= 20 || !['EPERM', 'EBUSY', 'EACCES'].includes(e.code)) throw e; await sleep(100); } } };
+    if (exists(done)) { await sleep(500); await mv(P.origin, away); await sleep(8000); await mv(away, P.origin); }
+    const r = await run;
+    ok(exists(done), `the final push was never refused: ${say(r)}`);
+    ok(r.code === 0 && r.j.pushed && r.j.pushed.pushed === true && r.j.repo_lock && r.j.repo_lock.released === true, say(r));
+    ok(originLog(P)[0] === `records: run ${r.j.run_id} finished (completed), exit 0` && !originTree(P).includes(LOCK_GIT), `origin ${clip(originLog(P))}`);
+    ok(r.ms >= 20000, `the run took ${r.ms} ms: the push landed before the 5 + 15 s rounds`);
+  });
 }
 
 // =================================================================================================================
@@ -1137,6 +1540,7 @@ async function gitSection(W) {
   if (want('clearance')) await sec('clearance', () => clearanceSection(W));
   if (want('gates')) await sec('gates', () => gatesSection(W));
   if (want('selftest')) await sec('selftest', () => selftestSection(W));
+  if (want('retry')) await sec('retry', () => retrySection(W));
   if (want('git')) await sec('git', () => gitSection(W));
   await test('contract: every r3.cjs answer was exactly one JSON line, its exit (when it has one) equal to the process exit', () => ok(contract.length === 0, contract.slice(0, 8).join(' | ')));
   console.log(`\n${results.PASS} passed, ${results.FAIL} failed, ${results.SKIP} skipped (${Math.round((Date.now() - t0) / 1000)} s)${failed.length ? '\nFAILED: ' + failed.join(' | ') : ''}`);

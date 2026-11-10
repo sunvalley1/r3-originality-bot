@@ -109,7 +109,7 @@ rebuild of the entry plan (re-running F) in the same run-id is allowed **only be
 broadcast**: re-simulate the rebuilt plan and send it under §8's autonomous rule. After any send, a group
 of that plan **not yet started** whose fresh check makes it stale is written `status: "skipped"`, the
 reason in `error`, and so is every later group of that plan; the run goes on to Half B (`I-setup.md` §I.2), lists those groups in
-`report.md`, and the next scheduled run re-plans from F. A group already **in progress** whose next
+`report.md`, and the next wake re-plans from F (a fresh wake of the same run or the next scheduled run, §8 step 4). A group already **in progress** whose next
 transaction fails a fresh check (stale or floor) is never left half-done by that skip: it follows §8's
 recovery rule (step 4) in the same run-id — complete it if the floors and the boundary allow, otherwise
 unwind what landed if the boundary allows; if the boundary has flipped so that neither trading nor
@@ -754,8 +754,9 @@ simulation and the send after it) normally see different blocks, and **no step a
 two reads**, by block number or by hash. A local fork that mines only when a transaction arrives keeps one head
 between reads and hides this. What makes a plan valid at its send is: the signing account's nonce, `latest` ==
 `pending` == the nonce the plan gives that transaction (the nonce at build plus the plan's own sends before it;
-any other value means a transaction the plan did not expect: stop sending and reconcile from chain state, step 4 below,
-before anything else of the plan is sent); F's per-market pin (both pools of a market read in one multicall, so one block, `F-max-ev.md` step 1); a
+any other value at or above that nonce means a transaction the plan did not expect: stop sending and reconcile from
+chain state, step 4 below, before anything else of the plan is sent; a value below it is a lagging backend, *The nonce
+floor* below); F's per-market pin (both pools of a market read in one multicall, so one block, `F-max-ev.md` step 1); a
 pool-drift report, G's build-time `slot0` and `liquidity` read (§3) against F's, listing in the print and in
 `report.md` the pools that moved, which refuses nothing by itself; each call's own floor (§2, §3); and the
 pre-send re-check before each send (§3's boundary read, fresh `slot0` and quotes, and the pre-send gas check
@@ -763,6 +764,23 @@ above). A pool that merely moved is reported, never stale by itself. Reads that 
 (`C-select.md` step 4's block timestamp rides in the same multicall as its reads), and a read pinned to an
 explicit block (setup's independent cross-check, `I-setup.md` I.2 §7) compares at that block; neither is a
 comparison between two reads at `latest`.
+
+**The nonce floor; this paragraph is the one place the rule is written.** A public RPC can answer a read from a
+backend a few blocks behind (2026-10-30: `latest 4341 pending 4342` 1.6 s after the run's own receipt at 4341). The
+floor is a value the run already proved: `n + 1` once a transaction of the holder is known mined at `n` (its own
+receipt, reverted or not, a settlement, its own cancel), the nonce the plan gives the transaction being checked, a
+`latest` an earlier read of the same planner call returned (a wake is one call); never a `pending`, which proves
+nothing. A nonce read below the floor, or whose `pending` is below its own `latest` (no answer), is a lagging
+backend: read it again up to 8 times over about 30 s (after 2, 2, 3, 3, 5, 5, 5 and 5 s) and judge only a read that
+is neither. A lagging backend can only be low, so a read at or above the floor is judged at once: a `latest` ==
+`pending` that is not the nonce expected, or a `pending` above `latest` (a simulation reading a pending nonce above
+the plan's included: the signer's own `simulate`, whatever its status, and the helper's `simulate` of G's build or the
+PSM3 ramp), is a transaction the run did not send (another sender's, unless the
+start-of-run repair named one of this arm's nonces Pending), and sending stops as above. Still below after the
+re-reads: a transport failure (`nonce-lag`, exit 5), not a safety stop; so is a G build simulation that reports a
+pending nonce below the plan's (it ran on a lagging backend's older state). The floor is a lower bound the chain has
+passed, never equality between two reads, and every step of it is a read: nothing is sent twice. A scheduled run's
+fresh wake after either stop is `I-setup.md` I.2 §6, *A fresh wake in the same run*.
 
 **Affordability; this paragraph is the one place the rule is written.** Before each keep-whole group starts
 (the PSM3 ramp, each mint and each trade group of an entry plan, each session-2 batch of Half B), the signer's
@@ -815,7 +833,15 @@ stale. **Before the run's first broadcast**, re-run F and re-simulate **once**; 
 again, write the failing group and every later group `status: "skipped"`, the reason in `error`, and
 continue to Half B (`I-setup.md` §I.2). **After any broadcast**, skip the failing group and every later
 not-yet-started group the same way; a group already in progress follows the recovery rule (step 4, §1).
-Never send a group simulated after a failing one. Supervised mode re-presents the plan instead.
+Never send a group simulated after a failing one. Supervised mode re-presents the plan instead. A G build that
+finds the plan stale before the first broadcast (a failed or tick-crossing quote, the sUSDS or Invalid read, the
+return probe of a leg quoted on the state a set-sell or merge-arb leaves, the budget, an unusable pool: "the plan is
+stale, rebuild from F") takes the same once-only
+re-plan; the trading boundary does not (only a fresh C clears it). The signer's own `simulate` before each send
+(§8 step 3) that answers a failure (a `status` other than `0x1`, a failed pre-send gas check, or a pending nonce
+below the transaction's: a backend behind the head) is asked again after 4 s and 8 s, and only its last answer is
+judged; a pending nonce above the transaction's is judged at once, whatever the status (another sender's
+transaction at that nonce is the likely cause of a failed one).
 
 **The fifth requirement, autonomous mode only: a scope allowlist in the signer.** The signing process the
 operator supplies refuses every transaction outside the R3 call set: `to` the Seer Router, SwapRouter02 or
@@ -877,9 +903,12 @@ never writes key-handling code to fill the gap.
   4. If any transaction fails, reverts, would breach its floor or fails its fresh trading-boundary read or its
      pre-send gas check (stale), **stop sending** and reconcile from
      chain state. A receipt timeout, transport error or missing receipt means **unconfirmed, never
-     failed**. Before building **any** recovery for a transaction that was broadcast, settle its nonce
+     failed**; a receipt the signer printed `confirmed` that the chain helper does not show yet is read again up
+     to 5 times, 2 s apart, before the nonce is settled (a lagging backend, *The nonce floor* above). Before building **any** recovery for a transaction that was broadcast, settle its nonce
      `n` (`inflight.json`'s `nonce`) — three outcomes, and no timeout (a confirmed nonce *below* `n` is
-     none of them: it is a chain-mismatch, `I-setup.md` I.2 §6, *Runs that die mid-way*). **Every** attempt at
+     none of them: it is a chain-mismatch, `I-setup.md` I.2 §6, *Runs that die mid-way*, and only with proof: no
+     receipt for any recorded `tx_hash`, and five reads over about 60 s, now and after 10, 10, 20 and 20 s, that all
+     stay below `n`; a read that catches up is a lagging backend and is judged as usual). **Every** attempt at
      `n` in the run, with its `calldata_hash` (the money rules, below, define it), is kept in
      local bookkeeping, `./run/<run-id>/nonce-attempts.json`, the append-only list that `I-setup.md` I.2 §6
      defines, never overwritten on settlement:
@@ -906,7 +935,11 @@ never writes key-handling code to fill the gap.
      - **Pending:** the pending nonce is above `n` and the latest nonce is not, or a transaction is mined
        at `n` but its `input` cannot be read (a transport or RPC error: unconfirmed, not failed, readable
        on a later attempt), or an attempt with a `null` `calldata_hash` cannot be excluded (under Not sent,
-       below). Only this and a not-sent
+       below). A Pending that is only "not yet" (the pending nonce above `n` and the latest not, or a matched
+       transaction whose receipt is not readable yet) is settled again before it stops anything: in the run that
+       sent it every 10 s for 2 minutes, then every 30 s for 3 minutes more (5 minutes in all, never within 5 minutes
+       of the run's deadline), at a start-of-run repair every 15 s for up to 3 minutes; Landed then goes on as
+       Landed, Not sent as Not sent. Only this and a not-sent
        finding on a signer that cannot pin the nonce that no cancel has consumed (a scheduled run sends its own: the *Nonce pinning* paragraph above) block sending: build **no** recovery, stop sending, write `wake-status.json` `aborted` with the hash and
        nonce in its `notes` (a supervised session writes none: its unsettled `inflight.json` already marks
        the run-id as not final) — the end-of-run write keeps `aborted`, so the next run's start-of-run repair
@@ -944,7 +977,13 @@ never writes key-handling code to fill the gap.
      `status: "skipped"`, the refusal text in `error` and in `wake-status.json`'s `notes`; legs of it that
      already landed stay as filled rows, listed as half-done in `report.md`; build no recovery batch and
      retry nothing (a refused recovery send included); the run continues to Half B (`I-setup.md` §I.2).
-     This is never a recovery loop.
+     This is never a recovery loop. An RPC failure the signer met before signing is no refusal: an answer
+     `rpc-transport`, `rpc-http`, or an `rpc-error` that is no revert and no `-38xxx` refusal, with `signed: false`,
+     `broadcast: false` and no `broadcast` or hash line, signed nothing, so the attempt is retired and the
+     transaction goes through the whole pre-send check again (the nonce and its floor, *The nonce floor* above, the file and its
+     hash, the signer's `simulate`, the pre-send gas check) after 5, 15 and 30 s, at most 3 times; a
+     `simulation-reverted` answer once, after 5 s. Exhausted, it is a refusal as above. A throttle answered before
+     signing is re-run by the planner's runner on its own (`I-setup.md` I.2 §7, *Rate limits*).
      On a settled revert, a transaction of an in-progress group settled as not sent, or a floor breach or
      stale check found before sending, build a **recovery batch**, a new plan
      from that state (never a resend), by one deterministic rule: re-quote; if completing the group clears its floors and the
@@ -962,7 +1001,9 @@ never writes key-handling code to fill the gap.
      merge-back is `buy-and-merge`; each such row names the failed transaction and the word "recovery"
      in `error`. Groups of the approved plan not yet sent when the sequence stopped are written
      `status: "skipped"`; they are re-planned (and, in supervised mode, re-approved; in autonomous mode
-     the next scheduled run re-plans them from F, §1), never resumed on the original plan or "yes".
+     the next wake re-plans them from F, §1: a fresh wake of the same run when the planner marks the stop
+     recoverable, `I-setup.md` I.2 §6, *A fresh wake in the same run*, else the next scheduled run), never resumed
+     on the original plan or "yes".
   5. Tell the human plainly — in supervised mode in the printed plan before the "yes"; in autonomous mode
      `report.md` names every group left half-done and what the recovery rule did — that with a non-atomic signer a group can be left half-done between
      transactions (e.g. one pair leg bought, or a split without its sales). EIP-7702 removes that risk,
@@ -978,10 +1019,17 @@ never writes key-handling code to fill the gap.
   that no cancel consumed (the *Nonce pinning* paragraph, signer requirements above), a held send-lock, or a group of the entry plan left half-done.
   **Final** and **non-final**, here and wherever another file says "still `aborted`", are defined once, in
   `I-setup.md` I.2 §6 (*Runs that die mid-way*); only a prior run-id that is not final is repaired or held back
-  from H.
+  from H. The final write also carries `retry`, the planner's verdict on whether a fresh wake of the same run may
+  follow the stop (`I-setup.md` I.2 §6, *A fresh wake in the same run*).
 - **Rows as they land.** Each `fills.json` row is appended, with its `tx_hash`, right after its receipt,
-  not at the end of the run (*Output*).
-- **Start-of-run repair.** At the start of every run, before today's F: for each prior run-id of this arm
+  not at the end of the run (*Output*). A failure after a receipt never loses its transaction: it is in
+  `exec-sends.json` before the nonce read that follows it (*The nonce floor*), and in the entry plan's own state
+  (`exec-state.json`) before any other read, or with the stop that nonce read met; the start-of-run repair counts the
+  group's landed transactions from that state (and from `exec-sends.json`, should a run die between the two writes)
+  and appends each one's missing row from the signed calldata, and a session-2 batch whose last transaction landed
+  gets its rows at once.
+- **Start-of-run repair.** At the start of every run, before today's F (every wake of it: a fresh wake of the same
+  run repairs the run-id that stopped minutes before, `I-setup.md` I.2 §6, *A fresh wake in the same run*): for each prior run-id of this arm
   (`I-setup.md` §I.2's filter) that has an `inflight.json` (or, once its last nonce settled,
   `inflight.settled.json`) and is not final (`I-setup.md` I.2 §6) — skipping any run-id named in `./run/.lock.deep-r3-trade/owner.txt` while that lock exists
   and its owner's `pid` plus `process_start_time` is alive, and any run-id with a live supervised-session
@@ -1111,8 +1159,9 @@ a repair before comparing any input; its path is the `log_path` the signer print
 after that run-id's start, matched on (nonce, `input_hash`)), or from the call's output, once
 it is readable (local bookkeeping), and never compute the `hash` yourself. Where no `tx_hash` was recorded, or no receipt exists for the
 recorded one while the latest nonce is above `n`, settle by finding, at or after that attempt's `from_block` (`I-setup.md` I.2 §7's settlement reads),
-the transaction from `from_address` at nonce `n` and judge it by step 4 (Landed, Not sent, or Pending). **A send is not idempotent: never re-run one** (a throttled `send` that printed no `broadcast` line signed nothing
-and is re-run: `I-setup.md` I.2 §7, *Rate limits*). If a send returns a hash you cannot confirm, stop
+the transaction from `from_address` at nonce `n` and judge it by step 4 (Landed, Not sent, or Pending). **A send is not idempotent: never re-run one** (a `send` that printed no `broadcast` line and answered before
+signing signed nothing and is sent again: a throttle, `I-setup.md` I.2 §7, *Rate limits*, or an RPC failure re-entered
+through the whole pre-send check, step 4's pre-broadcast refusal paragraph). If a send returns a hash you cannot confirm, stop
 and reconcile from chain state; do not resend. It is unconfirmed, not failed (sequential step 4), on any
 signer, atomic included: settle its nonce by step 4's three outcomes (landed, pending, not sent; no
 timeout). Only while it is pending (a `null` `calldata_hash` that cannot be excluded included, or after a

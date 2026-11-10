@@ -136,6 +136,9 @@ function startMock() {
     data: () => ({ status: 200, headers: { 'content-type': 'text/plain;charset=UTF-8' }, body: Buffer.from('{}') }),
     batchMode: 'ok', // 'ok' | 'refuse' (answers a JSON-RPC error object to an array) | '429-n'
     fail429: 0,
+    fail500: 0, // POSTs answered HTTP 500
+    failBody: 0, // POSTs whose headers are sent and whose socket is then destroyed mid-body
+    failDataBody: 0, // data GETs whose headers are sent and whose socket is then destroyed mid-body
     port: 0,
   };
   m.server = http.createServer((req, res) => {
@@ -146,6 +149,7 @@ function startMock() {
         m.http.push({ method: 'GET', url: req.url, items: [] });
         if (req.url !== DATA_PATH) { res.writeHead(404); res.end('nope'); return; }
         if (m.fail429 > 0) { m.fail429--; res.writeHead(429, { 'retry-after': '0' }); res.end('slow down'); return; }
+        if (m.failDataBody > 0) { m.failDataBody--; res.writeHead(200, { 'content-type': 'text/plain;charset=UTF-8', 'content-length': '4096' }); res.write('{"marketsData":{'); setTimeout(() => res.destroy(), 20); return; }
         const d = m.data();
         res.writeHead(d.status, d.headers || {});
         res.end(d.body);
@@ -158,6 +162,8 @@ function startMock() {
       m.http.push({ method: 'POST', url: req.url, items: reqs.map((r) => ({ method: r.method, params: r.params })), isBatch });
       for (const r of reqs) ALL_METHODS_SEEN.push(r.method);
       if (m.fail429 > 0) { m.fail429--; res.writeHead(429, { 'retry-after': '0' }); res.end('slow down'); return; }
+      if (m.fail500 > 0) { m.fail500--; res.writeHead(500, { 'content-type': 'text/plain' }); res.end('internal server error'); return; }
+      if (m.failBody > 0) { m.failBody--; res.writeHead(200, { 'content-type': 'application/json', 'content-length': '4096' }); res.write('{"jsonrpc":"2.0","id":1,"res'); setTimeout(() => res.destroy(), 20); return; }
       if (isBatch && m.batchMode === 'refuse') {
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: -32600, message: 'batch not supported' } }));
@@ -906,6 +912,32 @@ async function offline() {
     const r2 = await helperIn(L)(['balance', ADDR1]);
     eq(r2.code, 5); eq(r2.json.code, 'rpc_rate_limited'); eq(mock.http.length, 4, 'four attempts, then stop');
     await mock.close();
+  });
+
+  await test('transport: HTTP 500 is retried like 502/503/504; a persistent one is an error after four attempts', async () => {
+    const mock = await startMock();
+    mock.rpc.eth_getBalance = () => '0x11';
+    const L = makeLayout('retry-500', mockConfig(mock));
+    mock.fail500 = 2;
+    const r = await helperIn(L)(['balance', ADDR1]);
+    eq(r.code, 0, r.stdout); eq(r.json.wei, '17'); eq(mock.http.length, 3, 'two 500s then one success');
+    mock.http.length = 0; mock.fail500 = 99;
+    const r2 = await helperIn(L)(['balance', ADDR1]);
+    eq(r2.code, 5); eq(r2.json.code, 'rpc_rate_limited'); eq(mock.http.length, 4, 'four attempts, then stop');
+    mock.fail500 = 0; await mock.close();
+  });
+
+  await test('transport: a body cut mid-way (socket destroyed after the headers) is retried; a persistent one is rpc_unreachable, exit 5, never exit 1', async () => {
+    const mock = await startMock();
+    mock.rpc.eth_getBalance = () => '0x12';
+    const L = makeLayout('retry-body', mockConfig(mock));
+    mock.failBody = 2;
+    const r = await helperIn(L)(['balance', ADDR1]);
+    eq(r.code, 0, r.stdout); eq(r.json.wei, '18'); eq(mock.http.length, 3, 'two cut bodies then one success');
+    mock.http.length = 0; mock.failBody = 99;
+    const r2 = await helperIn(L)(['balance', ADDR1]);
+    eq(r2.code, 5, r2.stdout); eq(r2.json.code, 'rpc_unreachable'); eq(mock.http.length, 4, 'four attempts, then stop');
+    mock.failBody = 0; await mock.close();
   });
 
   await test('transport: a rate limit reported as a JSON-RPC error inside HTTP 200 is retried too', async () => {
@@ -1757,6 +1789,19 @@ async function offline() {
     eq((await H(['data', 'a/b'])).json.code, 'bad_run_id');
     eq((await H(['data', '.lock'])).json.code, 'bad_run_id');
     await mock.close();
+  });
+  await test('data: a body cut mid-way is retried; a persistent one is data_unreachable, exit 5 (the offline-fallback signal), never exit 1', async () => {
+    const mock = await startMock();
+    const L = makeLayout('data-cut', mockConfig(mock));
+    mock.data = () => ({ status: 200, headers: {}, body: Buffer.from(syntheticBody()) });
+    mock.failDataBody = 2;
+    let r = await helperIn(L)(['data', 'd5']);
+    eq(r.code, 0, r.stdout); eq(r.json.usable, true); eq(mock.http.length, 3, 'two cut bodies then one success');
+    mock.http.length = 0; mock.failDataBody = 99;
+    r = await helperIn(L)(['data', 'd6']);
+    eq(r.code, 5, r.stdout); eq(r.json.code, 'data_unreachable'); eq(mock.http.length, 4, 'four attempts, then stop');
+    ok(!fs.existsSync(path.join(L.run('d6'), 'r3-data.json')), 'nothing written');
+    mock.failDataBody = 0; await mock.close();
   });
   await test('data: an unreachable data function is data_unreachable (the offline-fallback signal)', async () => {
     const mock = await startMock();

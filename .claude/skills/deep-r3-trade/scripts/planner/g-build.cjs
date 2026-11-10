@@ -282,7 +282,12 @@ async function build(R) {
     sim = await G.simulatePlan(ctx, io, groups, nMintSent);
     let firstFail = null; let failText = null; let failFile = null;
     for (const w of sim.windows) {
-      if (w.page.pending_nonce !== S.nonce.pending) throw gsafety('nonce-moved', `${w.file}: the simulation's pending nonce ${w.page.pending_nonce} is not the plan's ${S.nonce.pending}`);
+      // the batch's own pending read (G section 8, The nonce floor): above the plan's nonce, another sender's transaction;
+      // below it, a lagging backend answered, so its simulation ran on an older state (a transport stop, never a plan)
+      const pn = w.page.pending_nonce;
+      if (Number.isInteger(pn) && pn > S.nonce.pending) throw gsafety('nonce-moved', `${w.file}: the simulation's pending nonce ${pn} is above the plan's ${S.nonce.pending}: a send happened outside this plan`, { foreign: true });
+      if (Number.isInteger(pn) && pn < S.nonce.pending) throw new lib.Stop({ step: 'G', cause: 'nonce-lag', status: 'aborted', exit: lib.EXIT.TRANSPORT, notes: `G stop (no plan written): ${w.file}: the simulation's pending nonce ${pn} is below the plan's ${S.nonce.pending}, which the run already proved: a lagging RPC answered the simulation, not another sender; nothing was sent`, fields: { transport: true } });
+      if (pn !== S.nonce.pending) throw gsafety('nonce-moved', `${w.file}: the simulation's pending nonce ${pn} is not the plan's ${S.nonce.pending}`);
       const pb = G.pageProblems(w.page, { entries: w.groupIdx.length, count: w.groupIdx.reduce((s, gi) => s + groups[gi].txs.length, 0) });
       if (pb.length) {
         const local = w.page.first_failed_group; const gi = Number.isInteger(local) && local < w.groupIdx.length ? w.groupIdx[local] : null;

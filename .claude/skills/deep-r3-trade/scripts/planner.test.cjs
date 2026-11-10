@@ -299,7 +299,7 @@ function simulatePage(w0, groups, sc) {
   const page = {
     from: w0.holder, input: 'groups', entries: groups.length, count: rows.length, all_success: failed.length === 0, failed_count: failed.length,
     first_failed_index: failed.length ? failed[0][0] : null, first_failed_group: failed.length ? failed[0][1] : null, over_cap_count: 0, first_over_cap_index: null, clamped_count: 0,
-    pending_nonce: pendingOf(w0), gas_limit_rule: 'ceil(maxUsedGas x 1.2), clamped at 16777216; ceil(gasUsed x 1.5) for a call the RPC gave no maxUsedGas',
+    pending_nonce: pendingOf(w0) + (sc.simNonceDelta || 0), gas_limit_rule: 'ceil(maxUsedGas x 1.2), clamped at 16777216; ceil(gasUsed x 1.5) for a call the RPC gave no maxUsedGas',
     columns: ['index', 'group', 'status', 'gasUsed', 'maxUsedGas', 'gas_limit'], calls: rows,
   };
   if (failures.length) page.failures = failures;
@@ -411,6 +411,10 @@ function helperDispatch(M, sub, args) {
       M.calls.nonce++;
       let latest = w.nonce; let pending = pendingOf(w);
       if (sc.nonceBump && M.calls.nonce > sc.nonceBump.after) { latest++; pending++; }
+      // nonceLag {afterSends, reads}: once the ledger holds afterSends sends, the next `reads` nonce reads answer from a
+      // lagging backend, latest - 1 with pending as it is (30 Oct: `latest 4341 pending 4342` after the receipt at 4341)
+      const lag = sc.nonceLag;
+      if (lag && w.sends >= lag.afterSends && (lag.done || 0) < lag.reads) { lag.done = (lag.done || 0) + 1; M.saveScen(); latest--; M.calls.lagged = (M.calls.lagged || 0) + 1; }
       return { address: lc(args[0]), latest, pending };
     }
     case 'balance': return { address: lc(args[0]), wei: lc(args[0]) === w.holder ? w.eth : '0', eth: String(Number(w.eth) / 1e18) };
@@ -444,6 +448,9 @@ function helperDispatch(M, sub, args) {
     case 'multicall': {
       M.calls.mc++;
       if (sc.transportAlways) mockFail('rpc_unreachable', 'RPC unreachable: request timed out after 30000 ms', 5);
+      // transportAfterSends {sends, n}: once the ledger holds `sends` sends, the next n multicalls meet a transport failure
+      const tas = sc.transportAfterSends;
+      if (tas && w.sends >= tas.sends && (tas.done || 0) < tas.n) { tas.done = (tas.done || 0) + 1; M.saveScen(); mockFail('rpc_unreachable', 'RPC unreachable: request timed out after 30000 ms', 5); }
       const name = path.basename(String(args[0] || ''));
       if (sc.revertOn && sc.revertOn === name) mockFail('call_reverted', 'execution reverted: Multicall3: call failed (pool over capacity, 429)', 8, { revert_reason: 'Multicall3: call failed' });
       let reads; try { reads = JSON.parse(projFile(args[0])); } catch (e) { if (e instanceof MockOut) throw e; mockFail('bad_argument', 'the reads file is not JSON', 2); }
@@ -453,6 +460,8 @@ function helperDispatch(M, sub, args) {
     }
     case 'simulate': {
       if (sc.simulateUnsupported) mockFail('simulate_unsupported', 'the endpoint has no eth_simulateV1 (method not found)', 5);
+      // simulateFail {n, rpc_code}: eth_simulateV1 answers an error n times (a flaky backend, or the node's own refusal)
+      if (sc.simulateFail && sc.simulateFail.n > 0) { sc.simulateFail.n--; M.saveScen(); mockFail('simulate_failed', `eth_simulateV1 failed: mock error ${sc.simulateFail.rpc_code}`, 5, { rpc_code: sc.simulateFail.rpc_code }); }
       let groups; try { groups = JSON.parse(projFile(args[0])); } catch (e) { if (e instanceof MockOut) throw e; mockFail('bad_argument', 'the simulate file is not JSON', 2); }
       if (!Array.isArray(groups) || !groups.every((g) => g && Array.isArray(g.calls))) mockFail('bad_argument', 'this mock takes the groups form only', 2);
       // the helper's cap on calls flagged "return" per request (chain-helper.cjs MAX_SIM_RETURNS); the largest count any
@@ -620,6 +629,13 @@ function mockSignerMain(dir, argv) {
         const inputHash = keccakHex(call.data);
         const m = mine(w, call, want);
         if (M.scen.ethAfterSends && w.sends === M.scen.ethAfterSends.n) w.eth = M.scen.ethAfterSends.eth;
+        // foreignAfterSends n: right after the n-th send lands, another sender's zero-value transaction from the holder
+        // is mined at the next nonce (a second bot on the same wallet)
+        if (M.scen.foreignAfterSends && w.sends === M.scen.foreignAfterSends) {
+          w.block++; w.ts += 2; const fh = '0x' + sha(`foreign:${w.nonce}:${w.block}`);
+          w.txs.push({ hash: fh, nonce: w.nonce, from: w.holder, to: fakeAddr('another-sender'), input_keccak256: keccakHex('0x'), input_bytes: 0, block: w.block, status: '0x1', gas_used: '21000', effective_gas_price: w.gasPrice, l1_fee: '1000' });
+          w.nonce++; M.calls.foreign = (M.calls.foreign || []).concat([fh]);
+        }
         // onSend {selector, count, pool?: {addr, T0, factor}, arbitration?: qid}: once the count-th send with that selector
         // has landed, a third party moves a pool (its price times factor) or a question goes to arbitration
         const os2 = M.scen.onSend;
@@ -771,11 +787,11 @@ const KEYS = {
   e: ['blends', 'priced_from_candidates', 'priced_from_saved_body', 'null_price', 'null_price_rows', 'negative_third', 'fetched', 'artifacts'],
   f: ['rows', 'markets_with_rows', 'pair_markets', 'set_rows', 'single_side_rows', 'markets_without_row', 'skipped_entries', 'bankroll', 'staked_M', 'binds', 'expected_value', 'correlated_worst_case', 'iterations', 'step7_drops', 'tradeable_markets', 'held_markets', 'child_invalid_markets', 'merge_arb_markets', 'ramp_due', 'provisional', 'provisional_min_out', 'usdc_raw', 'usds_raw', 'body_used', 'ranges', 'pins', 'post3a_rows', 'probe', 'checks', 'drift_markets', 'drift_list', 'model_gap_max', 'helper_calls', 'quotes', 'seconds', 'artifacts'],
   g: ['nothing_to_send', 'groups', 'transactions', 'by_kind', 'markets', 'rows_in_groups', 'skipped_rows', 'skipped', 'mint', 'ramp_due', 'cut', 'nonce', 'first_last_nonce', 'drift', 'simulation', 'verify', 'eth', 'route_agreement', 'audit', 'indep', 'helper_calls', 'seconds', 'artifacts'],
-  exec: ['outcome', 'mode', 'groups_total', 'groups_done', 'transactions_total', 'transactions_sent', 'sent_this_invocation', 'first_tx', 'last_tx', 'gas_cost_eth_receipts', 'nonce_pinning', 'signer_env_dropped', 'signer_log_path', 'tx_hash_file'],
-  halfb: ['mode', 'actionable', 'sent', 'skipped', 'half_done', 'notes', 'artifacts', 'sends_this_invocation', 'keep_aborted', 'budget_exhausted', 'answer_watch', 'merge_bounds_at_read'],
+  exec: ['outcome', 'mode', 'groups_total', 'groups_done', 'transactions_total', 'transactions_sent', 'sent_this_invocation', 'first_tx', 'last_tx', 'gas_cost_eth_receipts', 'nonce_pinning', 'signer_env_dropped', 'signer_log_path', 'nonce_rereads', 'tx_hash_file'],
+  halfb: ['mode', 'actionable', 'sent', 'skipped', 'half_done', 'notes', 'artifacts', 'sends_this_invocation', 'keep_aborted', 'budget_exhausted', 'nonce_rereads', 'answer_watch', 'merge_bounds_at_read'],
   h: ['result', 'review_written'],
   report: ['report', 'lines', 'wake_status'],
-  wake: ['status', 'stopped_at_step', 'half_a_stop', 'traded', 'repaired', 'sends_blocked', 'h_rescored', 'h_results', 'notes', 'report', 'wake_status'],
+  wake: ['status', 'stopped_at_step', 'half_a_stop', 'traded', 'repaired', 'sends_blocked', 'h_rescored', 'h_results', 'notes', 'retry', 'report', 'wake_status'],
 };
 const shapeOk = (sub, j) => { const m = keysMissing(j, [...COMMON, ...KEYS[sub]]); return m.length ? `missing summary key(s) ${m.join(', ')}` : null; };
 
@@ -910,9 +926,11 @@ async function libSection(L) {
       ok(!exists(path.join(target, 'b.json')), 'the write landed outside');
     } finally { try { fs.rmdirSync(link); } catch (e) { try { fs.unlinkSync(link); } catch (x) { /* already gone */ } } }
   });
-  await test('lib: a summary over 20,000 characters is printed in its small form, valid JSON, under the cap', () => {
+  await test('lib: a summary over 20,000 characters is printed in its small form, valid JSON, under the cap; a wake\'s fresh-wake verdict (retry) survives the cut', () => {
     const s = lib.renderSummary({ subcommand: 'c', run_id: 'r', ok: true, exit: 0, stop: null, filler: 'x'.repeat(50000) });
     ok(s.length <= 20000 && JSON.parse(s).truncated === true && JSON.parse(s).subcommand === 'c', s.slice(0, 200));
+    const w = JSON.parse(lib.renderSummary({ subcommand: 'wake', run_id: 'r', ok: false, exit: 5, stop: { step: 'W', cause: 'half-a-stop' }, retry: { verdict: 'fresh-wake', class: 'transport', key: 'exec:nonce-lag', after_s: 600, why: 'w' }, notes: ['x'.repeat(30000)] }));
+    ok(w.truncated === true && w.retry && w.retry.key === 'exec:nonce-lag' && w.retry.after_s === 600 && w.notes === undefined, JSON.stringify(w).slice(0, 300));
   });
   await test('lib: this arm\'s forecast methods: csv-face-value, the researched prefix and the forecast-file mark of older run-ids; an unmarked method is another arm\'s', () => {
     ok(lib.isArmForecastMethod('csv-face-value'), 'csv-face-value');
@@ -972,6 +990,45 @@ async function libSection(L) {
     ok(z.exit === 1 && z.attempts === 1 && z.last.error === 'rpc-error', `no retries given: attempts ${z.attempts}`);
     fs.writeFileSync(path.join(L.mock, 'scenario.json'), '{}'); rmrf(path.join(L.mock, 'calls.json')); setWorld(L, freshWorld());
   });
+  await test('lib: the signer\'s RPC failure before signing on a read-only simulate (P6): rpc-http 503 twice, then the answer, after waits of 2 and 5 s; still failing after 3 re-runs it is the answer; -38014 and a revert text are never re-run; a send is never re-run for it here', async () => {
+    const T = { error: 'rpc-http', detail: 'HTTP 503 from the pinned RPC', signed: false, broadcast: false };
+    ok(lib.signerRetryable('simulate', 1, T, []) && lib.signerRetryable('reconcile', 1, T, []) && !lib.signerRetryable('send', 1, T, []) && !lib.signerRetryable('check', 1, T, []), 'subcommands');
+    ok(!lib.signerRetryable('simulate', 1, { ...T, error: 'rpc-error', rpc_code: -38014 }, []) && !lib.signerRetryable('simulate', 1, { ...T, error: 'rpc-error', rpc_code: 3 }, []) && !lib.signerRetryable('simulate', 1, { ...T, error: 'rpc-error', detail: 'execution reverted' }, []) && !lib.signerRetryable('simulate', 1, { ...T, detail: 'over rate limit' }, []), 'a -38xxx refusal, code 3, a revert text, a throttle (its own rule)');
+    ok(lib.signerRpcFailure(1, T, [{ event: 'lock' }, T]) && !lib.signerRpcFailure(1, T, [{ event: 'broadcast', hash: '0x01' }, T]), 'a send with a broadcast line is no failure before signing');
+    setWorld(L, freshWorld());
+    const call = { to: sw().A.sUSDS, data: iface().encodeFunctionData('approve', [sw().A.ROUTER, 1n]), value: '0' };
+    fs.writeFileSync(path.join(L.proj, 'run', 'mine', 'tx.json'), JSON.stringify({ calls: [call], gasLimit: '55200' }));
+    const waits = []; const nap = async (ms) => { waits.push(ms); };
+    fs.writeFileSync(path.join(L.mock, 'scenario.json'), JSON.stringify({ signerSimError: { error: 'rpc-http', detail: 'HTTP 503 from the pinned RPC', n: 2 } }));
+    const a = await lib.runSigner(cfg, 'simulate', 'run/mine/tx.json', [], { retries: 9, sleep: nap });
+    ok(a.exit === 0 && a.last.simulated === true && a.attempts === 3 && JSON.stringify(waits) === '[2000,5000]', `503 twice: exit ${a.exit}, attempts ${a.attempts}, waits ${waits}`);
+    waits.length = 0; fs.writeFileSync(path.join(L.mock, 'scenario.json'), JSON.stringify({ signerSimError: { error: 'rpc-http', detail: 'HTTP 503 from the pinned RPC', n: 9 } }));
+    const b = await lib.runSigner(cfg, 'simulate', 'run/mine/tx.json', [], { retries: 9, sleep: nap });
+    ok(b.exit === 1 && b.last.error === 'rpc-http' && b.attempts === 4 && JSON.stringify(waits) === '[2000,5000,10000]', `exhausted: attempts ${b.attempts}, waits ${waits}`);
+    for (const sse of [{ error: 'rpc-error', rpc_code: -38014, detail: 'x', n: 1 }, { error: 'rpc-error', rpc_code: -32000, detail: 'execution reverted', n: 1 }]) {
+      waits.length = 0; fs.writeFileSync(path.join(L.mock, 'scenario.json'), JSON.stringify({ signerSimError: sse }));
+      const c = await lib.runSigner(cfg, 'simulate', 'run/mine/tx.json', [], { retries: 9, sleep: nap });
+      ok(c.exit === 1 && c.attempts === 1 && waits.length === 0, `${JSON.stringify(sse)}: attempts ${c.attempts}`);
+    }
+    fs.writeFileSync(path.join(L.mock, 'scenario.json'), '{}'); rmrf(path.join(L.mock, 'calls.json'));
+  });
+  await test('lib: the helper\'s simulate_failed outside -38xxx (P8b) is re-run twice, then the answer (not transient); -38014 is never re-run; no re-run when the caller gives none', async () => {
+    fs.writeFileSync(path.join(L.proj, 'run', 'mine', 'sim.json'), JSON.stringify([{ calls: [{ to: sw().A.sUSDS, data: iface().encodeFunctionData('approve', [sw().A.ROUTER, 1n]), value: '0' }] }]));
+    const waits = []; const nap = async (ms) => { waits.push(ms); };
+    fs.writeFileSync(path.join(L.mock, 'scenario.json'), JSON.stringify({ simulateFail: { n: 2, rpc_code: -32603 } }));
+    const a = await lib.runHelper(cfg, ['simulate', 'run/mine/sim.json'], { retries: 9, sleep: nap });
+    ok(a.attempts === 3 && JSON.stringify(waits) === '[2000,4000]', `-32603 twice: attempts ${a.attempts}, waits ${waits}`);
+    waits.length = 0; fs.writeFileSync(path.join(L.mock, 'scenario.json'), JSON.stringify({ simulateFail: { n: 9, rpc_code: -32603 } }));
+    const b = await lib.runHelper(cfg, ['simulate', 'run/mine/sim.json'], { retries: 9, sleep: nap }).then(() => null, (x) => x);
+    ok(b && b.code === 'simulate_failed' && b.attempts === 3 && b.transient === false, `exhausted: ${b && b.attempts}`);
+    waits.length = 0; fs.writeFileSync(path.join(L.mock, 'scenario.json'), JSON.stringify({ simulateFail: { n: 1, rpc_code: -38014 } }));
+    const c = await lib.runHelper(cfg, ['simulate', 'run/mine/sim.json'], { retries: 9, sleep: nap }).then(() => null, (x) => x);
+    ok(c && c.code === 'simulate_failed' && c.attempts === 1 && waits.length === 0, `-38014: ${c && c.attempts}`);
+    fs.writeFileSync(path.join(L.mock, 'scenario.json'), JSON.stringify({ simulateFail: { n: 1, rpc_code: -32603 } }));
+    const d = await lib.runHelper(cfg, ['simulate', 'run/mine/sim.json'], { retries: 0, sleep: nap }).then(() => null, (x) => x);
+    ok(d && d.attempts === 1, `retries 0: ${d && d.attempts}`);
+    fs.writeFileSync(path.join(L.mock, 'scenario.json'), '{}');
+  });
   await test('lib: a revert whose text looks like a rate limit (exit 8) is not re-run', async () => {
     fs.mkdirSync(path.join(L.proj, 'run', 'mine'), { recursive: true }); fs.writeFileSync(path.join(L.proj, 'run', 'mine', 'reads.json'), JSON.stringify([{ to: ZERO_ADDR, signature: 'x()(uint256)' }]));
     fs.writeFileSync(path.join(L.mock, 'scenario.json'), JSON.stringify({ revertOn: 'reads.json' }));
@@ -1020,6 +1077,43 @@ async function libSection(L) {
       ['simulated 0x1', { exit: 0, last: { simulated: true, ok: true, nonce: 5, results: [{ index: 0, status: '0x1', gas_used: '46000' }] }, lines: [], stdout: '', stderr: '', attempts: 1, timedOut: false }, 'none', undefined],
     ];
     for (const [what, ans, cause, exit] of cases) { const r = await run(ans); ok(r.cause === cause && r.exit === exit, `${what}: ${JSON.stringify(r)}, expected ${cause} exit ${exit}`); }
+  });
+  // the nonce floor (lib.readNonceAtLeast, G section 8 The head moves): a read below what the run proved, or a pending
+  // below its own latest, is read again after 2, 2, 3, 3, 5, 5, 5, 5 s; a read at or above the floor is returned at once
+  // for the caller to judge; still below after the 8 re-reads, nonce-lag (exit 5). Each case on a holder of its own,
+  // because the floor is kept per holder for the life of the process
+  let floorSeq = 0;
+  const floorRead = async (reads, floor, o = {}) => {
+    const holder = fakeAddr(`floor-${++floorSeq}`); if (o.proved) lib.noteNonceFloor(holder, o.proved);
+    const waits = []; const tally = {}; let k = 0; const total0 = lib.nonceRereads();
+    const H = async (args) => { ok(args[0] === 'nonce' && args[1] === holder && args.length === 2, `the read ${JSON.stringify(args)}`); const [latest, pending] = reads[Math.min(k++, reads.length - 1)]; return { address: holder, latest, pending }; };
+    let n = null; let e = null;
+    try { n = await lib.readNonceAtLeast(H, holder, floor, { sleep: async (ms) => { waits.push(ms); }, tally, where: 'test' }); } catch (x) { e = x; }
+    return { n, e, waits, reads: k, tally, total: lib.nonceRereads() - total0, floorAfter: lib.nonceFloor(holder) };
+  };
+  await test('nonce floor (lib.readNonceAtLeast): 30 Oct\'s 4341/4342 after the receipt at 4341 (floor 4342) is read again once and 4342/4342 passes; nine reads of it end nonce-lag (exit 5, transport, floor, reads, nonce) after waits 2, 2, 3, 3, 5, 5, 5, 5 s; 4342/4343 and 4343/4343 come back at once; 410/0 (pending below latest) and 5/3 with no floor are read again; a read below the floor a receipt raised is read again', async () => {
+    const a = await floorRead([[4341, 4342], [4342, 4342]], 4342);
+    ok(a.n && a.n.latest === 4342 && a.n.pending === 4342 && JSON.stringify(a.waits) === '[2000]' && a.reads === 2 && a.tally.lagRereads === 1 && a.total === 1, `30 Oct, caught up: ${JSON.stringify(a)}`);
+    const b = await floorRead([[4341, 4342]], 4342);
+    ok(b.e && b.e.cause === 'nonce-lag' && b.e.exit === 5 && b.e.status === 'aborted' && b.e.fields.transport === true && b.e.fields.floor === 4342 && b.e.fields.reads === 9 && b.e.fields.nonce.latest === 4341 && b.e.fields.nonce.pending === 4342 && /after 9 reads over about 30 s .*latest 4341 pending 4342, below the 4342 the run already proved .*a lagging RPC, not another sender/.test(b.e.notes), `exhausted: ${JSON.stringify({ cause: b.e && b.e.cause, exit: b.e && b.e.exit, fields: b.e && b.e.fields, notes: b.e && b.e.notes })}`);
+    ok(JSON.stringify(b.waits) === JSON.stringify([2000, 2000, 3000, 3000, 5000, 5000, 5000, 5000]) && b.reads === 9 && b.tally.lagRereads === 8 && JSON.stringify(lib.NONCE_REREAD_MS) === JSON.stringify(b.waits), `waits ${JSON.stringify(b.waits)}`);
+    for (const [r, why] of [[[4342, 4343], 'a pending transaction at the floor (the caller: pending-transaction, foreign)'], [[4343, 4343], 'a moved nonce above the floor (the caller: nonce-moved, foreign)']]) {
+      const c = await floorRead([r], 4342); ok(c.n && c.n.latest === r[0] && c.n.pending === r[1] && c.waits.length === 0 && c.reads === 1 && c.floorAfter === r[0], `${why}: ${JSON.stringify(c)}`);
+    }
+    const d = await floorRead([[410, 0], [410, 410]], 410); ok(d.n && d.n.pending === 410 && d.waits.length === 1, `410/0: ${JSON.stringify(d)}`);
+    const f = await floorRead([[5, 3], [5, 5]], null); ok(f.n && f.n.pending === 5 && f.waits.length === 1, `5/3 with no floor: ${JSON.stringify(f)}`);
+    const g = await floorRead([[4341, 4341], [4342, 4342]], 4000, { proved: 4342 }); ok(g.n && g.n.latest === 4342 && g.waits.length === 1, `below the process floor: ${JSON.stringify(g)}`);
+    const h = await floorRead([[7, 7]], null, { proved: 4 }); ok(h.n && h.n.latest === 7 && h.waits.length === 0 && h.floorAfter === 7, `a latest raises the floor: ${JSON.stringify(h)}`);
+  });
+  await test('nonce floor in G (g-lib checkNonce): a read below the plan\'s nonce is read again, then judged; a pending transaction or a moved nonce at or above it stops at once, exit 4, marked foreign (another sender\'s, not a lag)', async () => {
+    const GL = require(path.join(L.bin, 'planner', 'g-lib.cjs'));
+    const io = (reads, waits) => { let k = 0; return { H: async () => { const [latest, pending] = reads[Math.min(k++, reads.length - 1)]; return { latest, pending }; }, sleep: async (ms) => { waits.push(ms); }, log: () => {} }; };
+    const w1 = []; const n = await GL.checkNonce(io([[6, 6], [7, 7]], w1), fakeAddr(`floor-g-${++floorSeq}`), 7, 'G build');
+    ok(n.latest === 7 && JSON.stringify(w1) === '[2000]', `lag then caught up: ${JSON.stringify({ n, w1 })}`);
+    for (const [r, cause] of [[[7, 8], 'pending-transaction'], [[8, 8], 'nonce-moved']]) {
+      const w2 = []; const e = await GL.checkNonce(io([r], w2), fakeAddr(`floor-g-${++floorSeq}`), 7, 'G build').then(() => null, (x) => x);
+      ok(e && e.cause === cause && e.exit === 4 && e.fields.foreign === true && w2.length === 0, `${r}: ${JSON.stringify(e && { cause: e.cause, exit: e.exit, fields: e.fields })}`);
+    }
   });
   // signer mode (b), a TradeExecutor with a session key (I-setup.md I.2 section 7, The planner): exec-core, the one send
   // path, refuses it before any read, write-ahead or signer call; only that known value refuses
@@ -1266,7 +1360,8 @@ async function repairSection(root) {
     w(`run/${P1}/inflight.json`, { run_id: P1, from_address: H0, nonce: N, to: TO, calldata_hash: DATA_HASH, chain_id: 10, from_block: 1000, tx_hash: TXH });
     w(`run/${P1}/nonce-attempts.json`, [{ nonce: N, to: TO, calldata_hash: DATA_HASH, from_block: 1000, tx_hash: TXH }]);
   };
-  const env = (c, pin) => X.makeEnv(c, { step: 'W', holder: H0, setup: { nonce_pinning: pin } });
+  // no real waits (the repair's Pending settled again, P3): e.sleep records nothing
+  const env = (c, pin) => { const e = X.makeEnv(c, { step: 'W', holder: H0, setup: { nonce_pinning: pin } }); e.sleep = async () => {}; return e; };
   await test('repair: a prior run-id whose wake-status says traded but which holds an unsettled inflight.json (a Half B send) is not final; a Pending nonce blocks every send of the wake and stays', async () => {
     setP1(); const c = stubCtx('rp-today'); Object.assign(chain, { latest: N, pending: N + 1, receipt: null, blockTxs: [] });
     ok(HB.isFinalRun(c, P1) === false, 'isFinalRun true with an inflight.json');
@@ -1303,7 +1398,7 @@ async function repairSection(root) {
     w('run/.lock.deep-r3-trade/owner.txt', owner); w('run/.lock.deep-r3-trade/live-runs.txt', ''); e.lock = { mode: o.mode || 'wrapper', taken: o.mode === 'supervised', text: owner };
     // no real waits: each wait is recorded in chain.sleeps, and o.onSleep(ms) may change the world while it lasts
     e.sleep = async (ms) => { chain.sleeps.push(ms); if (o.onSleep) o.onSleep(ms); }; if (o.deadlineMs) e.deadlineMs = o.deadlineMs;
-    Object.assign(chain, { latest: N, pending: N, receipt: null, blockTxs: [], head: undefined, cancel: o.cancel, reconcile: o.reconcile, cancels: 0, reconciles: 0, sleeps: [], badArgs: undefined });
+    Object.assign(chain, { latest: N, pending: N, receipt: null, blockTxs: [], head: undefined, cancel: o.cancel, reconcile: o.reconcile, cancels: 0, reconciles: 0, sleeps: [], badArgs: undefined }, o.chain || {});
     let s = null; try { await X.broadcast(e, new X.Book(cfg, R1), { label: 'split (test)', to: TO, signer_input_file: `run/${R1}/g-tx/tx-n${N}.json`, gas_limit: '100000' }, N, DATA_HASH, {}); } catch (x) { s = x; }
     rmrf(path.join(proj, 'run', '.lock.deep-r3-trade'));
     return s;
@@ -1323,6 +1418,8 @@ async function repairSection(root) {
   await test('not-sent in a scheduled run (G section 8, Nonce pinning): read again, then the run\'s own cancel (clear-nonce at n) is mined; n settles Not sent with the cancel as the foreign transaction, inflight.json renamed, the reconcile releases the send-lock, the stop does not keep the wake aborted, nonce-cancels.json records it', async () => {
     const s = await sendOnce(false); const k = cancelsOf(R1);
     ok(s && s.cause === 'not-sent' && s.fields.keep_aborted === false && s.fields.foreign && s.fields.foreign.hash === CANCEL_H && !ex(`run/${R1}/inflight.json`) && ex(`run/${R1}/inflight.settled.json`) && /the run's own cancel/.test(s.notes), JSON.stringify(s && { cause: s.cause, notes: s.notes, fields: s.fields }));
+    // the cancel is the run's own (settleNonce marks it from nonce-cancels.json): never taken for another sender
+    ok(s.fields.own_cancel === true && s.fields.settlement.own_cancel === true && !X.anotherSender(s.cause, s.fields), `own_cancel: ${JSON.stringify(s.fields.settlement)}`);
     ok(k.length === 1 && k[0].status === 'confirmed' && k[0].hash === CANCEL_H && k[0].nonce === N && k[0].by === R1 && chain.cancels === 1 && chain.reconciles === 1, JSON.stringify({ k, cancels: chain.cancels, reconciles: chain.reconciles }));
     ok(chain.sleeps[0] === X.STUCK_RECHECK_MS && !chain.badArgs, `the re-read wait first (${JSON.stringify(chain.sleeps)}); lib.runSigner refuses ${JSON.stringify(chain.badArgs)}`);
   });
@@ -1464,6 +1561,40 @@ async function repairSection(root) {
     const add = rjp(d, 'fills.json').runs.slice(rows.length);
     ok(add.length === 2 && add.every((r) => r.route === 'redeem' && r.tx_hash === txh && r.status === 'filled') && add[0].side === 'DOWN' && add[0].filled === 3 && add[0].fill_price === 1 && add[1].side === 'Invalid' && add[1].filled === 1 && add[1].fill_price === 0 && rep.repaired.some((r) => r.run_id === d), clip({ add, rep }, 1200));
   });
+  // ---- Phase 2: settlement re-reads (G section 8 step 4: P3 Pending settled again, P4 chain-mismatch only with proof)
+  await test('settlement (P4): a confirmed nonce below n with a receipt for the recorded hash is Landed (the receipt is read first); five low reads over about 60 s (waits 10, 10, 20, 20 s) are chain-mismatch; low, then caught up, is the normal outcome', async () => {
+    const c = stubCtx('rp-p4'); const sleeps = []; const e = env(c, true); e.sleep = async (ms) => { sleeps.push(ms); if (chain.catchUp && sleeps.length === chain.catchUp) Object.assign(chain, { latest: N, pending: N }); };
+    setP1(); Object.assign(chain, { latest: N - 1, pending: N - 1, receipt: receiptOf(), blockTxs: [], catchUp: 0 });
+    const a = await X.settleNonce(e, new X.Book(cfg, P1), N);
+    ok(a.outcome === 'landed' && a.hash === TXH && sleeps.length === 0, JSON.stringify(a));
+    setP1(); Object.assign(chain, { latest: N - 1, pending: N - 1, receipt: null });
+    const b = await X.settleNonce(e, new X.Book(cfg, P1), N);
+    ok(b.outcome === 'chain-mismatch' && JSON.stringify(sleeps) === JSON.stringify([10000, 10000, 20000, 20000]) && /5 reads/.test(b.via), JSON.stringify({ b, sleeps }));
+    sleeps.length = 0; setP1(); Object.assign(chain, { latest: N - 1, pending: N - 1, receipt: null, catchUp: 2 });
+    const d = await X.settleNonce(e, new X.Book(cfg, P1), N);
+    ok(d.outcome === 'not-sent' && sleeps.length === 2, JSON.stringify({ d, sleeps }));
+    Object.assign(chain, { catchUp: 0 }); rmrf(path.join(proj, 'run', P1));
+  });
+  await test('settlement (P3): an unclear send whose nonce reads Pending (pending above n, latest at n) three times, then Landed, is settled again every 10 s and confirmed; Pending throughout stops pending after 2 min of 10 s waits and 3 min of 30 s waits; too close to the deadline it is not settled again', async () => {
+    const landAt = 3;
+    const s = await sendOnce(true, { chain: { pending: N + 1 }, onSleep: () => { if (chain.sleeps.length === landAt) Object.assign(chain, { latest: N + 1, pending: N + 1, receipt: receiptOf() }); } });
+    ok(s === null && JSON.stringify(chain.sleeps) === JSON.stringify([10000, 10000, 10000]), JSON.stringify({ s: s && { cause: s.cause, notes: s.notes }, sleeps: chain.sleeps }));
+    const p = await sendOnce(true, { chain: { pending: N + 1 } });
+    ok(p && p.cause === 'pending' && p.fields.keep_aborted === true && JSON.stringify(chain.sleeps) === JSON.stringify([...Array(12).fill(10000), ...Array(6).fill(30000)]), JSON.stringify({ p: p && { cause: p.cause }, sleeps: chain.sleeps }));
+    const q = await sendOnce(true, { chain: { pending: N + 1 }, deadlineMs: Date.now() + X.CANCEL_ROOM_MS + 5000 });
+    ok(q && q.cause === 'pending' && chain.sleeps.length === 0, JSON.stringify({ q: q && q.cause, sleeps: chain.sleeps }));
+  });
+  await test('repair (P3): a prior run-id\'s nonce Pending, then Landed within 3 min, is settled again every 15 s and finalized; Pending throughout still blocks the wake\'s sends after 12 waits', async () => {
+    rmrf(path.join(proj, 'run', R1)); setP1(); const c = stubCtx('rp-p3'); const sleeps = []; const e = env(c, true);
+    e.sleep = async (ms) => { sleeps.push(ms); if (sleeps.length === 2) Object.assign(chain, { latest: N + 1, pending: N + 1, receipt: receiptOf() }); };
+    Object.assign(chain, { latest: N, pending: N + 1, receipt: null, blockTxs: [] });
+    const rep = await WK.repair(c, e, []);
+    ok(!rep.blockSends && JSON.stringify(sleeps) === '[15000,15000]' && rep.repaired.some((r) => r.run_id === P1), JSON.stringify({ rep, sleeps }));
+    setP1(); sleeps.length = 0; e.sleep = async (ms) => { sleeps.push(ms); };
+    Object.assign(chain, { latest: N, pending: N + 1, receipt: null, blockTxs: [] });
+    const rep2 = await WK.repair(c, e, []);
+    ok(rep2.blockKind === 'pending' && sleeps.length === 12 && sleeps.every((x) => x === 15000), JSON.stringify({ rep2, sleeps }));
+  });
   await test('repair rows: a simple-buy whose approve (its first transaction) landed after its run stopped, the group written skipped: no row for an approve; the group is now half-done (1 of 2): named, the run-id left aborted and not final; the next repair names it again and appends nothing', async () => {
     const d = 'rp-late-approve'; const gid = `simple-buy:${k2.name}:UP`;
     const txs = [txOf(0, N, 'approve repo -> SwapRouter02 (stake)', k2.repo, apr(S.A.SWAP, W18(2))), txOf(1, N, 'buy UP (exactInput, min 99.5% of quote)', S.A.SWAP, swapIn(k2.repo, k2.up, W18(2), W18(3)))];
@@ -1475,6 +1606,30 @@ async function repairSection(root) {
       const c = stubCtx(today); const rep = await WK.repair(c, env(c, true), []);
       ok(rep.notes.some((x) => x.startsWith(`run ${d}: group ${gid} (1 of 2 transactions landed) is half-done`)) && !rep.repaired.some((r) => r.run_id === d) && rjp(d, 'wake-status.json').status === 'aborted' && !HB.isFinalRun(c, d) && JSON.stringify(rjp(d, 'fills.json').runs) === JSON.stringify(rows), `${today}: ${JSON.stringify(rep)}`);
     }
+  });
+  // ---- a repair that throws part-way (wake.run's catch: wake.repairFailed)
+  await test('repair: a repair that throws keeps what it found before (a run-id closed as chain-mismatch, a block); a transport failure leaves a block found earlier (a Pending) standing, any other cause decides it (repair-failed:<cause>, verdict none): a cause that is never retried is never hidden behind a block', async () => {
+    const rec = (d, n, h) => { arm(d); w(`run/${d}/wake-status.json`, { run_id: d, status: 'aborted', notes: '' }); w(`run/${d}/inflight.json`, { run_id: d, from_address: H0, nonce: n, to: TO, calldata_hash: DATA_HASH, chain_id: 10, from_block: 1000, tx_hash: h }); w(`run/${d}/nonce-attempts.json`, [{ nonce: n, to: TO, calldata_hash: DATA_HASH, from_block: 1000, tx_hash: h }]); };
+    const V = (rep) => WK.retryVerdict({ W: { status: 'aborted', steps: {} }, haStop: { step: 'G', summary: { stop: { cause: 'sends-blocked', notes: 'x' } }, keep_aborted: true }, rep });
+    const transport = new lib.Stop({ step: 'W', cause: 'rpc_unreachable', status: 'aborted', exit: 5, notes: 'the helper still failed after its re-runs' });
+    // rp-thr-0 (a record from another chain state: closed), rp-thr-a (Pending: blocks the sends), then rp-thr-b, whose
+    // inflight.json is cut short, so the repair throws there; `failure` stands in for the thrown cause when given
+    const go = async (mismatch, failure) => {
+      for (const d of fs.readdirSync(path.join(proj, 'run'))) rmrf(path.join(proj, 'run', d));
+      if (mismatch) rec('rp-thr-0', N + 5, '0x' + 'e0'.repeat(32));
+      rec('rp-thr-a', N, TXH); arm('rp-thr-b'); w('run/rp-thr-b/wake-status.json', { run_id: 'rp-thr-b', status: 'aborted', notes: '' }); w('run/rp-thr-b/inflight.json', '{"nonce": 8,');
+      Object.assign(chain, { latest: N, pending: N + 1, receipt: null, blockTxs: [] });
+      const c = stubCtx('rp-thr-w'); const rep = {}; let thrown = null;
+      try { await WK.repair(c, env(c, true), [], { out: rep }); } catch (e) { thrown = e; WK.repairFailed(rep, failure || e); }
+      return { rep, thrown, v: V(rep) };
+    };
+    const a = await go(false);
+    ok(a.thrown && a.rep.blockKind === 'repair-failed:internal' && a.rep.notes.some((n) => /^run rp-thr-a: nonce 7 is Pending/.test(n)) && a.v.verdict === 'none' && a.v.key === 'repair:repair-failed:internal', `an internal error after a Pending: ${JSON.stringify({ rep: a.rep, v: a.v })}`);
+    const b = await go(false, transport);
+    ok(b.thrown && b.rep.blockKind === 'pending' && b.rep.notes.some((n) => /^the start-of-run repair failed \(rpc_unreachable\)/.test(n)) && b.v.verdict === 'fresh-wake' && b.v.class === 'settle' && b.v.key === 'repair:pending', `a transport failure after a Pending: ${JSON.stringify({ rep: b.rep, v: b.v })}`);
+    const m = await go(true, transport);
+    ok(m.thrown && JSON.stringify(m.rep.chainMismatch) === '["rp-thr-0"]' && m.v.verdict === 'none' && m.v.key === 'repair:chain-mismatch', `a run-id closed before the throw: ${JSON.stringify({ rep: m.rep, v: m.v })}`);
+    for (const d of fs.readdirSync(path.join(proj, 'run'))) rmrf(path.join(proj, 'run', d));
   });
 }
 
@@ -1684,6 +1839,14 @@ async function gSafetySection(L) {
     restore(L, RID, ctx.snapG);
     const r = P(['g', RID], { scen: { nonceBump: { after: 1 } } }); ok(r.code === 4 && r.j.stop.cause === 'nonce-moved' && noPlan(), say(r));
   });
+  await test('g: the build\'s simulation reports a pending nonce above the plan\'s (another sender between G\'s read and its simulation) -> exit 4 nonce-moved, foreign, no plan', () => {
+    restore(L, RID, ctx.snapG);
+    const r = P(['g', RID], { scen: { simNonceDelta: 1 } }); ok(r.code === 4 && r.j.stop.cause === 'nonce-moved' && r.j.foreign === true && noPlan(), say(r));
+  });
+  await test('g: the build\'s simulation reports a pending nonce below the plan\'s (a lagging backend answered it) -> exit 5 nonce-lag, a transport stop, no plan', () => {
+    restore(L, RID, ctx.snapG);
+    const r = P(['g', RID], { scen: { simNonceDelta: -1 } }); ok(r.code === 5 && r.j.stop.cause === 'nonce-lag' && r.j.transport === true && !r.j.foreign && noPlan(), say(r));
+  });
   await test('g: the helper encodes one calldata differently from ethers -> exit 4 hash-mismatch, no plan, the signer never asked', () => {
     restore(L, RID, ctx.snapG);
     const r = P(['g', RID], { scen: { encodeCorrupt: 7 } }); ok(r.code === 4 && r.j.stop.cause === 'hash-mismatch' && noPlan() && !r.calls.signer.check, say(r));
@@ -1698,7 +1861,140 @@ async function gSafetySection(L) {
 // =================================================================================================================
 // SECTION exec-safety: the executor's refusals on the pipeline's plan (each from the same snapshot)
 // =================================================================================================================
+// The nonce floor on the send path, in process on the installed copy with a stubbed helper and signer (G section 8, The
+// head moves): confirm after the run's own receipt (floor n + 1) and the pre-send check (floor n). Each case on a holder
+// and a run-id of its own; the wrapper's lock written for broadcast's lockStillOurs and removed after.
+async function execFloorInProcess(L) {
+  const lib = require(path.join(L.bin, 'planner', 'lib.cjs')); const X = require(path.join(L.bin, 'planner', 'exec-core.cjs'));
+  const cfg = { projectRoot: fs.realpathSync.native(L.proj), helperPath: fs.realpathSync.native(path.join(L.mock, 'chain-helper.cjs')), signerPath: fs.realpathSync.native(path.join(L.mock, 'signer.cjs')), rpcGapMs: 0, parallel: 1 };
+  const call = { to: sw().A.sUSDS, data: iface().encodeFunctionData('approve', [sw().A.ROUTER, 7n]), value: '0' };
+  const DATA_HASH = keccakHex(call.data); const TXH = '0x' + 'f1'.repeat(32);
+  let seq = 0;
+  // one broadcast through exec-core (write-ahead, the signer's send printing broadcast then confirmed, confirm) with the
+  // nonce reads scripted; or, with o.presend, the pre-send check alone. o.receipt: fields over the receipt (a revert);
+  // o.simNonce: the pending nonce the signer's simulate reports (default n); o.sims: scripted simulate answers, one per
+  // call ({status, nonce, gas}, the last repeated); o.sends: scripted send answers before the normal one ('rpc-http',
+  // 'rpc-revert', 'sim-reverted', 'after-broadcast', 'allowlist', 'gas-funds', 'refused-38014', 'throttled',
+  // 'revert-capacity'); o.receiptMisses: receipt
+  // reads answered not found first
+  const go = async (n, reads, o = {}) => {
+    const k = ++seq; const rid = `pt-floor-${k}`; const holder = fakeAddr(`floor-exec-${k}`); const dir = path.join(L.proj, 'run', rid);
+    rmrf(dir); fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(path.join(dir, 'tx.json'), JSON.stringify({ calls: [call], gasLimit: '55200' }));
+    const tx = { idx: 3, label: 'approve sUSDS -> Router (M)', to: call.to, data: call.data, gas_limit: '55200', gas_used: 46000, max_used_gas: 46000, signer_input_file: `run/${rid}/tx.json`, calldata_keccak256: DATA_HASH };
+    const seen = { reads: 0, sim: 0, send: 0, receiptMiss: 0 }; const waits = [];
+    const c = lib.makeContext({ cfg, sub: 'exec', runId: rid }); c.holder = () => holder;
+    c.helper = async (args) => {
+      if (args[0] === 'block') return { json: { number: 158868289 } };
+      if (args[0] === 'receipt' && (o.receiptMisses || 0) > seen.receiptMiss) { seen.receiptMiss++; return { json: { found: false, tx_hash: args[1] } }; }
+      if (args[0] === 'receipt') return { json: { found: true, tx_hash: TXH, status: '0x1', success: true, block_number: 158868290, from: holder, to: lc(call.to), gas_used: '46000', effective_gas_price: '1000000', l1_fee: '1000', ...(o.receipt || {}) } };
+      if (args[0] === 'keccak256') return { json: { keccak256: DATA_HASH } };
+      if (args[0] === 'nonce' && args.length === 2) { const r = reads[Math.min(seen.reads++, reads.length - 1)]; return { json: { address: holder, latest: r[0], pending: r[1] } }; }
+      throw new Error('unexpected helper call ' + JSON.stringify(args));
+    };
+    c.signer = async (sub, file, extra, so) => {
+      if (sub === 'simulate') {
+        seen.sim++; const a = o.sims ? o.sims[Math.min(seen.sim - 1, o.sims.length - 1)] : {}; const st = a.status || '0x1';
+        const last = { simulated: true, ok: st === '0x1', nonce: a.nonce !== undefined ? a.nonce : o.simNonce === undefined ? n : o.simNonce, results: [{ index: 0, status: st, gas_used: a.gas || '46000' }] };
+        return { exit: st === '0x1' ? 0 : 1, last, lines: [last], stdout: JSON.stringify(last), stderr: '', attempts: 1, timedOut: false };
+      }
+      if (sub === 'send' && o.sends && seen.send < o.sends.length) {
+        const kind = o.sends[seen.send++]; const lock = { event: 'lock', command: 'send' }; so.onLine(JSON.stringify(lock), lock);
+        const no = { command: 'send', signed: false, broadcast: false };
+        const ans = { 'rpc-http': { error: 'rpc-http', detail: 'HTTP 503 from the pinned RPC', ...no }, 'rpc-revert': { error: 'rpc-error', rpc_code: -32000, detail: 'execution reverted', ...no }, 'sim-reverted': { error: 'simulation-reverted', detail: 'the pre-send simulation reverted', ...no }, allowlist: { refused: 'allowlist', rule: 'selector', detail: 'x', ...no }, 'gas-funds': { error: 'insufficient-gas-funds', detail: 'x', ...no }, 'refused-38014': { error: 'rpc-error', rpc_code: -38014, detail: 'x', ...no }, 'after-broadcast': { error: 'rpc-http', detail: 'HTTP 503 from the pinned RPC', ...no }, throttled: { error: 'rpc-http', detail: 'HTTP 429 from the pinned RPC', ...no }, 'revert-capacity': { error: 'rpc-error', rpc_code: 3, detail: 'execution reverted: exceeds its capacity', ...no } }[kind];
+        const lines = [lock];
+        if (kind === 'after-broadcast') { const bc = { event: 'broadcast', hash: TXH, nonce: n, input_hash: DATA_HASH, from: holder, to: lc(call.to) }; so.onLine(JSON.stringify(bc), bc); lines.push(bc); o.receiptMisses = 0; }
+        so.onLine(JSON.stringify(ans), ans); lines.push(ans);
+        return { exit: 1, last: ans, lines, stdout: '' };
+      }
+      if (sub === 'send') { seen.send++; const bc = { event: 'broadcast', hash: TXH, nonce: n, input_hash: DATA_HASH, from: holder, to: lc(call.to) }; so.onLine(JSON.stringify(bc), bc); const cf = { ...bc, event: 'confirmed', block_number: 158868290, gas_used: '46000' }; so.onLine(JSON.stringify(cf), cf); return { exit: 0, last: cf, lines: [bc, cf], stdout: '' }; }
+      throw new Error('unexpected signer call ' + sub);
+    };
+    const env = X.makeEnv(c, { step: 'G', holder, setup: null }); env.sleep = async (ms) => { waits.push(ms); };
+    const owner = JSON.stringify({ pid: 4242, process_start_time: 'x', host: 'h', started_at: new Date().toISOString(), stage: 'claude-p', run_id: rid });
+    fs.mkdirSync(lockDir(L.proj), { recursive: true }); fs.writeFileSync(path.join(lockDir(L.proj), 'owner.txt'), owner); fs.writeFileSync(path.join(lockDir(L.proj), 'live-runs.txt'), '');
+    env.lock = { mode: 'wrapper', taken: false, text: owner };
+    let res = null; let e = null;
+    try { res = o.presend ? await X.presend(env, new X.Book(cfg, rid), tx, n) : await X.broadcast(env, new X.Book(cfg, rid), tx, n, DATA_HASH, { source: 'entry', group: 'mint-parent' }); } catch (x) { e = x; } finally { rmrf(lockDir(L.proj)); }
+    const sends = exists(path.join(dir, 'exec-sends.json')) ? rj(path.join(dir, 'exec-sends.json')) : [];
+    const attempts = exists(path.join(dir, 'nonce-attempts.json')) ? rj(path.join(dir, 'nonce-attempts.json')) : [];
+    const out = { res, e, waits, seen, sends, attempts, rereads: env.lagRereads || 0, settled: exists(path.join(dir, 'inflight.settled.json')) && !exists(path.join(dir, 'inflight.json')), floor: lib.nonceFloor(holder) };
+    rmrf(dir);
+    return out;
+  };
+  const show = (r) => JSON.stringify({ res: r.res && { hash: r.res.hash }, e: r.e && { cause: r.e.cause, exit: r.e.exit, fields: r.e.fields, landed: r.e.landed && r.e.landed.hash, notes: r.e.notes }, waits: r.waits, seen: r.seen, sends: r.sends.length, rereads: r.rereads, settled: r.settled, floor: r.floor });
+  await test('nonce floor, confirm (30 Oct\'s answers, in process): the receipt of nonce 4341, then latest 4341 pending 4342, then 4342/4342: read again once after 2 s and confirmed; exec-sends.json written once; inflight settled; the floor 4342; nonce_rereads 1', async () => {
+    const r = await go(4341, [[4341, 4342], [4342, 4342]]);
+    ok(r.res && r.res.hash === TXH && !r.e && JSON.stringify(r.waits) === '[2000]' && r.rereads === 1 && r.sends.length === 1 && r.sends[0].nonce === 4341 && r.settled && r.floor === 4342 && r.seen.send === 1, show(r));
+  });
+  await test('nonce floor, confirm: another sender\'s answer after the receipt (4342/4343, a pending transaction; 4343/4343, the nonce moved) stops at once, exit 4, foreign (exec-core anotherSender), e.landed carrying the landed hash and its record; nothing waited on', async () => {
+    for (const [reads, cause] of [[[[4342, 4343]], 'pending-transaction'], [[[4343, 4343]], 'nonce-moved']]) {
+      const r = await go(4341, reads);
+      ok(r.e && r.e.cause === cause && r.e.exit === 4 && r.e.fields.foreign === true && X.anotherSender(r.e.cause, r.e.fields) && r.e.landed && r.e.landed.hash === TXH && r.e.landed.record && r.e.landed.record.idx === 3 && r.e.landed.record.nonce === 4341 && r.waits.length === 0 && r.sends.length === 1, `${cause}: ${show(r)}`);
+    }
+  });
+  await test('nonce floor, confirm: the lag outlasts the 8 re-reads (latest 4341 pending 4342 nine times): nonce-lag, exit 5, e.landed (the transaction landed and is recorded once, never sent again), waits 2, 2, 3, 3, 5, 5, 5, 5 s', async () => {
+    const r = await go(4341, [[4341, 4342]]);
+    ok(r.e && r.e.cause === 'nonce-lag' && r.e.exit === 5 && r.e.fields.floor === 4342 && r.e.landed && r.e.landed.hash === TXH && r.sends.length === 1 && r.seen.send === 1 && JSON.stringify(r.waits) === JSON.stringify([2000, 2000, 3000, 3000, 5000, 5000, 5000, 5000]) && r.settled && !X.anotherSender(r.e.cause, r.e.fields), show(r));
+  });
+  await test('nonce floor, the pre-send check (floor n): a read below n (8/8 for n 9) is read again and the send goes on; 9/10 (a pending transaction) and 10/10 (a moved nonce) stop at once, exit 4, foreign, before the signer\'s simulate', async () => {
+    const a = await go(9, [[8, 8], [9, 9]], { presend: true });
+    ok(a.res && a.res.sim && a.res.sim.nonce === 9 && JSON.stringify(a.waits) === '[2000]' && a.seen.sim === 1 && a.seen.send === 0, show(a));
+    for (const [reads, cause] of [[[[9, 10]], 'pending-transaction'], [[[10, 10]], 'nonce-moved']]) {
+      const r = await go(9, reads, { presend: true });
+      ok(r.e && r.e.cause === cause && r.e.exit === 4 && r.e.fields.foreign === true && r.waits.length === 0 && r.seen.sim === 0 && r.seen.send === 0, `${cause}: ${show(r)}`);
+    }
+  });
+  await test('nonce floor, the pre-send check: the signer\'s own simulate reads pending nonce 10 for n 9 (a transaction at n this run did not send): nonce-moved, exit 4, foreign; one that reads 8 (its own read lagging) is nonce-moved, never foreign; nothing sent', async () => {
+    const a = await go(9, [[9, 9]], { presend: true, simNonce: 10 });
+    ok(a.e && a.e.cause === 'nonce-moved' && a.e.exit === 4 && a.e.fields.foreign === true && X.anotherSender(a.e.cause, a.e.fields) && a.seen.send === 0, show(a));
+    const b = await go(9, [[9, 9]], { presend: true, simNonce: 8 });
+    ok(b.e && b.e.cause === 'nonce-moved' && b.e.exit === 4 && !b.e.fields.foreign && !X.anotherSender(b.e.cause, b.e.fields) && b.seen.send === 0 && b.seen.sim === 3 && JSON.stringify(b.waits) === '[4000,8000]', show(b));
+  });
+  await test('nonce floor, confirm: a reverted receipt of the holder\'s transaction at n still proves the chain passed n: the floor n + 1 (a recovery\'s read below it is a lagging RPC), the stop reverted (exit 3), inflight settled, no nonce read', async () => {
+    const r = await go(4341, [[4342, 4342]], { receipt: { status: '0x0', success: false } });
+    ok(r.e && r.e.cause === 'reverted' && r.e.exit === 3 && r.floor === 4342 && r.seen.reads === 0 && r.settled && r.sends.length === 0, show(r));
+  });
+  // ---- Phase 2 (G section 8 step 3 and 4; I-setup.md I.2 section 7, Rate limits)
+  await test('presend simulate re-run (P7): a pending nonce 0 then n passes after one 4 s wait; n + 1 stops at once (foreign); status 0x0 then 0x1 passes; 0x0 three times is stale-simulation after 4 s and 8 s; nothing sent', async () => {
+    const a = await go(9, [[9, 9]], { presend: true, sims: [{ nonce: 0 }, { nonce: 9 }] });
+    ok(a.res && a.seen.sim === 2 && JSON.stringify(a.waits) === '[4000]' && a.seen.send === 0, show(a));
+    const b = await go(9, [[9, 9]], { presend: true, sims: [{ nonce: 10 }] });
+    ok(b.e && b.e.cause === 'nonce-moved' && b.e.fields.foreign === true && b.seen.sim === 1 && b.waits.length === 0, show(b));
+    const c = await go(9, [[9, 9]], { presend: true, sims: [{ status: '0x0' }, { status: '0x1' }] });
+    ok(c.res && c.seen.sim === 2 && JSON.stringify(c.waits) === '[4000]', show(c));
+    const d = await go(9, [[9, 9]], { presend: true, sims: [{ status: '0x0' }] });
+    ok(d.e && d.e.cause === 'stale-simulation' && d.e.exit === 3 && d.seen.sim === 3 && JSON.stringify(d.waits) === '[4000,8000]' && d.seen.send === 0, show(d));
+    const g = await go(9, [[9, 9]], { presend: true, sims: [{ gas: '60000' }, { gas: '46000' }] });
+    ok(g.res && g.seen.sim === 2, `a failed gas check, then a clean one: ${show(g)}`);
+    const f = await go(9, [[9, 9]], { presend: true, sims: [{ status: '0x0', nonce: 10 }] });
+    ok(f.e && f.e.cause === 'nonce-moved' && f.e.exit === 4 && f.e.fields.foreign === true && f.seen.sim === 1 && f.waits.length === 0 && f.seen.send === 0, `a failed status with pending nonce n + 1 (another sender's transaction at n, the likely cause of the failure): ${show(f)}`);
+  });
+  await test('a send\'s RPC failure before signing (P5): HTTP 503 with signed:false and no broadcast line is retired and re-entered through the pre-send check after 5 s, then sent once; the attempts show the retired attempt and the live one', async () => {
+    const r = await go(4341, [[4341, 4341], [4341, 4341], [4342, 4342]], { sends: ['rpc-http'] });
+    const retired = r.attempts.filter((x) => x.status === 'not_broadcast'); const live = r.attempts.filter((x) => x.status !== 'not_broadcast');
+    ok(r.res && r.res.hash === TXH && r.seen.send === 2 && r.seen.sim === 1 && r.waits[0] === 5000 && retired.length === 1 && live.length === 2 && r.sends.length === 1, show(r) + JSON.stringify(r.attempts));
+    const x = await go(4341, [[4341, 4341]], { sends: ['rpc-http', 'rpc-http', 'rpc-http', 'rpc-http'] });
+    ok(x.e && x.e.cause === 'signer-refused' && x.e.fields.transient === true && x.e.fields.pre_sign_retries === 3 && x.seen.send === 4 && JSON.stringify(x.waits) === '[5000,15000,30000]' && x.sends.length === 0, `exhausted: ${show(x)}`);
+    const v = await go(4341, [[4341, 4341]], { sends: ['sim-reverted', 'sim-reverted'] });
+    ok(v.e && v.e.cause === 'signer-refused' && v.e.fields.transient === true && v.seen.send === 2 && JSON.stringify(v.waits) === '[5000]', `simulation-reverted once: ${show(v)}`);
+  });
+  await test('a send is never re-run (P5): after its broadcast line (settled from chain state instead), on refused:allowlist, insufficient-gas-funds, -38014 or a revert text (one that names a capacity included); none of these is transient; nor is a throttle that outlasted the runner\'s re-runs re-entered (exit 3, transient and throttled)', async () => {
+    const b = await go(4341, [[4342, 4342]], { sends: ['after-broadcast'] });
+    ok(b.seen.send === 1 && b.res && b.res.hash === TXH && b.sends.length === 1, `after the broadcast line, settled Landed: ${show(b)}`);
+    for (const kind of ['allowlist', 'gas-funds', 'refused-38014', 'rpc-revert', 'revert-capacity']) {
+      const r = await go(4341, [[4341, 4341]], { sends: [kind] });
+      ok(r.e && r.e.cause === 'signer-refused' && !r.e.fields.transient && !r.e.fields.throttled && r.seen.send === 1 && r.waits.length === 0, `${kind}: ${show(r)}`);
+    }
+    const t = await go(4341, [[4341, 4341]], { sends: ['throttled'] });
+    ok(t.e && t.e.cause === 'signer-refused' && t.e.exit === 3 && t.e.fields.transient === true && t.e.fields.throttled === true && t.e.fields.pre_sign_retries === undefined && t.seen.send === 1 && t.seen.sim === 0 && t.waits.length === 0 && t.attempts.filter((x) => x.status === 'not_broadcast').length === 1 && t.attempts.filter((x) => x.status !== 'not_broadcast').length === 1, `a throttle that outlasted lib.runSigner's re-runs ends the group (exit 3), never re-entered: ${show(t)} ${JSON.stringify(t.attempts)}`);
+  });
+  await test('receipt re-read (P2): the signer printed confirmed, the helper has no receipt twice, then has it: read again 2 s apart and confirmed, no settlement scan', async () => {
+    const r = await go(4341, [[4342, 4342]], { receiptMisses: 2 });
+    ok(r.res && r.res.hash === TXH && JSON.stringify(r.waits) === '[2000,2000]' && r.seen.receiptMiss === 2 && r.sends.length === 1, show(r));
+  });
+}
 async function execSafetySection(L) {
+  await execFloorInProcess(L);
   if (!ctx.snapG) { await test('exec-safety: the pipeline\'s plan', () => skip('the pipeline did not build a plan')); return; }
   const P = (args, o) => runPlanner(L, args, o);
   const rf = (n) => path.join(L.proj, 'run', RID, n);
@@ -1944,6 +2240,14 @@ async function rampSection(root) {
       ok(r.code === 3 && ws.stopped_at_step === 'ramp' && /psm3-capacity/.test(ws.notes) && !exists(rf(R2, 'allocation.json')) && !exists(rf(R2, 'nonce-attempts.json')) && ws.status !== 'aborted', say(r) + JSON.stringify(ws));
     } finally { rmrf(lockDir(W.proj)); }
   });
+  await test('wake: the ramp\'s simulation reports a pending nonce above the one just read (another sender): the ramp stops nonce-moved, exit 4, foreign, before any send; retry class foreign', () => {
+    const R3 = 'pt-ramp-3'; setWorld(W, holdRamp(freshWorld())); wrapperLock(W.proj, R3);
+    try {
+      const r = P(['wake', R3], { scen: { simNonceDelta: 1 } }); const ws = rj(rf(R3, 'wake-status.json')); const rs = rj(rf(R3, 'planner/ramp.json')).summary;
+      ok(r.code === 4 && ws.stopped_at_step === 'ramp' && rs.stop.cause === 'nonce-moved' && rs.foreign === true && !exists(rf(R3, 'nonce-attempts.json')), say(r) + clip({ ws, rs }, 1200));
+      ok(ws.retry && ws.retry.verdict === 'fresh-wake' && ws.retry.class === 'foreign' && ws.retry.key === 'ramp:nonce-moved' && ws.retry.quiet_s === 300, JSON.stringify(ws.retry));
+    } finally { rmrf(lockDir(W.proj)); }
+  });
   await test('f --provisional (supervised): 200 USDC and 0 sUSDS give rows sized on sUSDS + PSM3 minAmountOut, labelled provisional; g then stops stale-susds; plain f keeps the sUSDS-only sizing (no row)', () => {
     const R3 = 'pt-prov-1'; const w = freshWorld(); w.bal = { [S.A.USDC]: '200000000' }; setWorld(W, w);
     for (const s of ['c', 'd', 'e']) { const r = P([s, R3]); ok(r.code === 0, `${s}: ${say(r)}`); }
@@ -1994,6 +2298,115 @@ async function wakeAffordSection(root) {
       ok(r.code === 5 && hb.exit === 5 && hb.stop.cause === 'transport' && ws.status === 'aborted' && r.calls.sends.length === 28 && hb.sent.length === 0, say(r) + clip({ hb: hb.stop, ws }, 800));
     } finally { rmrf(lockDir(W.proj)); }
   });
+}
+// The nonce floor end to end and the verdict each wake writes (wake-status.json retry): a lagging RPC absorbed in place;
+// one that outlasts the re-reads (nonce-lag) and the fresh wake that repairs it, 30 Oct replayed; another sender at the
+// wallet (class foreign); and a landed transaction a stop after its receipt must not lose, in exec (exec-state.json, then
+// the repair's row) and in Half B (its rows at once)
+async function wakeLagSection(root) {
+  {
+    const { W, P, rf } = wakeLayout(root, 'wake-lag'); const R1 = 'pt-lag-1';
+    await test('wake: the RPC lags twice right after the run\'s first receipt (latest n - 1, pending n): read again in place, all 28 sent, the wake ends traded; exec reports nonce_rereads 2, wake-status.json and report.md note it, and its retry is none', () => {
+      wrapperLock(W.proj, R1);
+      try {
+        const r = P(['wake', R1], { scen: { nonceLag: { afterSends: 1, reads: 2 } } });
+        const ws = rj(rf(R1, 'wake-status.json')); const ex = rj(rf(R1, 'planner/exec.json')).summary;
+        ok(r.code === 0 && ws.status === 'traded' && ex.transactions_sent === 28 && !ex.stop && ex.nonce_rereads === 2 && r.calls.lagged === 2 && /nonce re-read 2 time\(s\) after a lagging RPC answer/.test(ws.notes), say(r) + clip({ ws, rereads: ex.nonce_rereads, stop: ex.stop }, 1500));
+        ok(ws.retry && ws.retry.verdict === 'none' && ws.retry.key === null && /nonce re-read 2 time\(s\)/.test(fs.readFileSync(rf(R1, 'report.md'), 'utf8')), JSON.stringify(ws.retry));
+      } finally { rmrf(lockDir(W.proj)); }
+    });
+  }
+  {
+    // 30 Oct replayed: the lag outlasts the re-reads right after the parent mint's approve (nonce 5) landed
+    const { W, P, rf } = wakeLayout(root, 'wake-30oct'); const R1 = 'pt-30oct-1'; const R2 = 'pt-30oct-2';
+    const started = new Date(Date.now() - 20 * 60 * 1000).toISOString(); // the first wake's start, which owner.txt keeps for the run
+    let first = false;
+    await test('wake, 30 Oct replayed: the lag outlasts the 8 re-reads after the parent mint\'s approve landed: exec stops nonce-lag (exit 5), the approve kept in exec-state.json with its index and nonce, mint-parent half-done (1 of 2); retry {fresh-wake, transport, 600, exec:nonce-lag}', () => {
+      wrapperLock(W.proj, R1, { started_at: started });
+      try {
+        const r = P(['wake', R1], { scen: { nonceLag: { afterSends: 1, reads: 20 } } });
+        const ws = rj(rf(R1, 'wake-status.json')); const ex = rj(rf(R1, 'planner/exec.json')).summary; const st = rj(rf(R1, 'exec-state.json')).groups['mint-parent'];
+        ok(r.code === 5 && ex.exit === 5 && ex.stop.cause === 'nonce-lag' && ws.status === 'aborted' && ws.started_at === started && ex.half_done && ex.half_done.group === 'mint-parent' && ex.half_done.landed === 1 && r.calls.sends.length === 1, say(r) + clip({ ws, stop: ex.stop, hd: ex.half_done }, 1500));
+        ok(st.txs.length === 1 && st.txs[0].idx === 0 && st.txs[0].nonce === 5 && st.txs[0].hash && rj(rf(R1, 'exec-sends.json')).length === 1, clip(st));
+        ok(ws.retry && ws.retry.verdict === 'fresh-wake' && ws.retry.class === 'transport' && ws.retry.after_s === 600 && ws.retry.key === 'exec:nonce-lag' && r.j.retry && r.j.retry.key === 'exec:nonce-lag', JSON.stringify(ws.retry));
+        first = true;
+      } finally { rmrf(lockDir(W.proj)); }
+    });
+    await test('wake, 30 Oct replayed, the fresh wake on a new run-id (owner.txt keeping the first started_at): its start-of-run repair completes mint-parent (the split at nonce 6, "recovery"), finalizes the first run-id "repaired by", then plans again from C and trades; both wake-status.json carry the first started_at, so the one deadline', () => {
+      if (!first) skip('the first wake did not stop as replayed');
+      wrapperLock(W.proj, R2, { started_at: started });
+      try {
+        const r = P(['wake', R2]);
+        const ws1 = rj(rf(R1, 'wake-status.json')); const ws2 = rj(rf(R2, 'wake-status.json')); const rec = rj(rf(R1, 'recovery.json')).groups['mint-parent'];
+        const split = rj(rf(R1, 'fills.json')).runs.find((x) => x.market === 'PARENT-MINT' && x.side === 'mint' && x.tx_hash && x.status === 'filled');
+        const recSends = rj(rf(R1, 'exec-sends.json')).filter((x) => x.source === 'recovery');
+        ok(ws1.status === 'traded' && /repaired by pt-30oct-2 at \S+: recovery: mint-parent completed/.test(ws1.notes) && rec.outcome === 'completed' && split && /recovery/.test(split.error) && recSends.length === 1 && recSends[0].nonce === 6, say(r) + clip({ ws1, rec, split }, 1500));
+        ok(r.code === 0 && ws2.status === 'traded' && ws2.started_at === started && ws1.started_at === started && ws2.retry && ws2.retry.verdict === 'none' && rj(rf(R2, 'planner/exec.json')).summary.transactions_sent > 0, say(r) + clip(ws2, 1200));
+      } finally { rmrf(lockDir(W.proj)); }
+    });
+  }
+  {
+    const { W, P, rf } = wakeLayout(root, 'wake-foreign'); const R1 = 'pt-foreign-1';
+    await test('wake: another sender\'s transaction lands right after the run\'s first send (a second bot on the wallet): confirm reads the nonce above the run\'s floor and stops at once (nonce-moved, exit 4, foreign), nothing waited on; retry {fresh-wake, foreign, 300, quiet_s 300}', () => {
+      wrapperLock(W.proj, R1);
+      try {
+        const r = P(['wake', R1], { scen: { foreignAfterSends: 1 } });
+        const ws = rj(rf(R1, 'wake-status.json')); const ex = rj(rf(R1, 'planner/exec.json')).summary; const st = rj(rf(R1, 'exec-state.json')).groups['mint-parent'];
+        ok(r.code === 4 && ex.stop.cause === 'nonce-moved' && ex.foreign === true && ex.nonce_rereads === 0 && r.calls.sends.length === 1 && (r.calls.foreign || []).length === 1 && ws.status === 'aborted' && st.txs.length === 1 && st.txs[0].nonce === 5, say(r) + clip({ stop: ex.stop, ws, st }, 1500));
+        ok(ws.retry && ws.retry.verdict === 'fresh-wake' && ws.retry.class === 'foreign' && ws.retry.after_s === 300 && ws.retry.quiet_s === 300 && ws.retry.key === 'exec:nonce-moved', JSON.stringify(ws.retry));
+      } finally { rmrf(lockDir(W.proj)); }
+    });
+  }
+  {
+    const { W, P, rf } = wakeLayout(root, 'wake-b1'); const R1 = 'pt-b1-1';
+    let first = false;
+    await test('wake: the balance read right after the parent split landed meets a transport failure (10 multicalls): exec stops transport (exit 5), and exec-state.json already holds the split\'s hash (2 of 2 landed, nonces 5 and 6)', () => {
+      wrapperLock(W.proj, R1);
+      try {
+        const r = P(['wake', R1], { scen: { transportAfterSends: { sends: 2, n: 10 } } });
+        const ex = rj(rf(R1, 'planner/exec.json')).summary; const st = rj(rf(R1, 'exec-state.json')).groups['mint-parent'];
+        ok(r.code === 5 && ex.stop.cause === 'transport' && r.calls.sends.length === 2 && st.txs.length === 2 && st.txs.map((t) => t.nonce).join() === '5,6' && st.txs.every((t) => t.hash) && rj(rf(R1, 'wake-status.json')).retry.class === 'transport', say(r) + clip({ stop: ex.stop, st }, 1500));
+        first = true;
+      } finally { rmrf(lockDir(W.proj)); }
+    });
+    await test('repair rows: an entry send exec-sends.json records that exec-state.json lost (a run killed between the two writes; a copy of that run-id) is placed in its group from exec-sends.json, its row appended from the signed calldata; the group counts 2 of 2, not half-done; a second pass changes nothing', async () => {
+      if (!first) skip('the first wake did not stop as staged');
+      const lib = require(path.join(W.bin, 'planner', 'lib.cjs')); const EX = require(path.join(W.bin, 'planner', 'exec.cjs'));
+      const R0 = 'pt-b1-copy'; const dst = path.join(W.proj, 'run', R0); rmrf(dst); fs.cpSync(path.join(W.proj, 'run', R1), dst, { recursive: true });
+      try {
+        const sp = path.join(dst, 'exec-state.json'); const st0 = rj(sp); const lost = st0.groups['mint-parent'].txs.pop(); wj(sp, st0);
+        const c = lib.makeContext({ cfg: W.cfg, sub: 'wake', runId: 'pt-b1-next' });
+        const pr = EX.repairPlanRows(c, R0, null, 'recovered by the copy\'s repair');
+        const st = rj(sp).groups['mint-parent'].txs; const row = rj(path.join(dst, 'fills.json')).runs.find((x) => x.tx_hash === lost.hash);
+        ok(st.length === 2 && st[1].hash === lost.hash && st[1].idx === 1 && st[1].nonce === 6 && /placed from exec-sends\.json/.test(st[1].recorded_at) && row && row.side === 'mint' && row.status === 'filled' && pr.added.length === 1 && !pr.half_done.length, clip({ pr, st, row }, 1500));
+        const pr2 = EX.repairPlanRows(c, R0, null, 'again');
+        ok(rj(sp).groups['mint-parent'].txs.length === 2 && !pr2.added.length && !pr2.half_done.length, clip(pr2, 600));
+      } finally { rmrf(dst); }
+    });
+    await test('wake, the next start-of-run repair of that run-id: the split\'s row appended from its signed calldata (exact), nothing sent again (the group counts 2 of 2, not half-done), the run-id finalized traded', async () => {
+      if (!first) skip('the first wake did not stop as staged');
+      const lib = require(path.join(W.bin, 'planner', 'lib.cjs')); const X = require(path.join(W.bin, 'planner', 'exec-core.cjs')); const WK = require(path.join(W.bin, 'planner', 'wake.cjs'));
+      const n0 = getWorld(W).sends;
+      const c = lib.makeContext({ cfg: W.cfg, sub: 'wake', runId: 'pt-b1-next' });
+      const rep = await WK.repair(c, X.makeEnv(c, { step: 'W', holder: HOLDER, setup: null }), []);
+      const st = rj(rf(R1, 'exec-state.json')).groups['mint-parent'];
+      const split = rj(rf(R1, 'fills.json')).runs.find((x) => x.market === 'PARENT-MINT' && x.side === 'mint' && x.tx_hash);
+      ok(split && split.status === 'filled' && split.tx_hash === st.txs[1].hash && /recovered by the start-of-run repair of pt-b1-next/.test(split.error) && /exact/.test(split.error) && rep.repaired.some((x) => x.run_id === R1 && x.status === 'traded') && !rep.notes.some((x) => /is half-done/.test(x)) && getWorld(W).sends === n0, clip({ rep, split }, 1500));
+    });
+  }
+  {
+    const { W, P, rf } = wakeLayout(root, 'wake-b2'); const R1 = 'pt-b2-1';
+    await test('wake: the lag outlasts the re-reads right after Half B\'s middle merge, its group\'s last transaction, landed: Half B stops nonce-lag (exit 5), yet the group counts as sent and its buy-and-merge row is written; nothing half-done; Half A ran its plan, so retry is none', () => {
+      wrapperLock(W.proj, R1);
+      try {
+        const r = P(['wake', R1], { scen: { nonceLag: { afterSends: 28 + 34, reads: 20 } } });
+        const hb = rj(rf(R1, 'planner/halfb.json')).summary; const sent = (hb.sent || []).find((x) => x.id === 'middle-merge:C'); const ws = rj(rf(R1, 'wake-status.json'));
+        const row = sent ? rj(rf(R1, 'fills.json')).runs.find((x) => x.route === 'buy-and-merge' && x.side === 'set' && x.tx_hash === sent.txs[sent.txs.length - 1]) : null;
+        ok(r.code === 5 && hb.stop && hb.stop.cause === 'nonce-lag' && r.calls.sends.length === 62 && sent && sent.txs.length === 34 && row && row.status === 'filled' && !(hb.half_done || []).length, say(r) + clip({ stop: hb.stop, sent: hb.sent, half_done: hb.half_done }, 1500));
+        ok(ws.retry && ws.retry.verdict === 'none' && ws.retry.key === 'B:nonce-lag', JSON.stringify(ws.retry));
+      } finally { rmrf(lockDir(W.proj)); }
+    });
+  }
 }
 // a group today's exec leaves half-done ends the wake aborted, cause half-done (I-setup.md I.2 section 6 (a)); the next
 // run's start-of-run repair names it and never finalizes it (section 6 (c))
@@ -2047,15 +2460,27 @@ async function recoverySection(root) {
   const S = sw(); const k1 = S.kids[1]; const gid = `dual-buy:${k1.name}`;
   {
     const { W, P, rf } = wakeLayout(root, 'rec-complete'); const R1 = 'pt-rec-c';
-    await test('recovery, complete: the signer\'s simulate fails the dual-buy\'s DOWN leg once, after its UP leg landed; exec applies the rule in the same run: the DOWN leg re-simulated, sent and landed (completed), its row naming "recovery" and the failed transaction; nothing half-done, the wake ends traded (exit 3: Half A stopped at exec)', () => {
+    await test('recovery, complete: the signer\'s simulate fails the dual-buy\'s DOWN leg after its UP leg landed, and again when asked after 4 s and 8 s; exec applies the rule in the same run: the DOWN leg re-simulated, sent and landed (completed), its row naming "recovery" and the failed transaction; nothing half-done, the wake ends traded (exit 3: Half A stopped at exec)', () => {
       wrapperLock(W.proj, R1);
       try {
-        const r = P(['wake', R1], { scen: { signerSimFail: { selector: SEL_OUT, after: 1, times: 1 } } });
+        // three failed answers: the first and presend's two re-runs (G section 8 step 3), so the send stops stale
+        const r = P(['wake', R1], { scen: { signerSimFail: { selector: SEL_OUT, after: 1, times: 3 } } });
         const ws = rj(rf(R1, 'wake-status.json')); const ex = rj(rf(R1, 'planner/exec.json')).summary; const rec = rj(rf(R1, 'recovery.json')).groups[gid];
         const rows = rj(rf(R1, 'fills.json')).runs.filter((x) => x.route === 'dual-buy' && x.side === 'DOWN' && x.status === 'filled' && /^recovery of group dual-buy:/.test(x.error || '') && /the failed transaction: buy count DOWN/.test(x.error));
         const sends = rj(rf(R1, 'exec-sends.json')).filter((x) => x.source === 'recovery');
         ok(r.code === 3 && ws.status === 'traded' && ex.stop.cause === 'stale-simulation' && !ex.half_done && ex.recovery && ex.recovery.outcome === 'completed' && ex.recovery.decision === 'complete' && rec.outcome === 'completed', say(r) + clip({ ws, rv: ex.recovery }, 1200));
         ok(rows.length === 1 && rows[0].filled > 0 && sends.length === 1 && sends[0].tx_hash === rows[0].tx_hash && /recovery of group dual-buy:\S+ in this run/.test(ws.notes) && !exists(rf(R1, 'inflight.json')) && /\*\*Recovery\*\*/.test(fs.readFileSync(rf(R1, 'report.md'), 'utf8')), clip({ rows, sends, notes: ws.notes }, 1500));
+      } finally { rmrf(lockDir(W.proj)); }
+    });
+  }
+  {
+    const { W, P, rf } = wakeLayout(root, 'rec-p7'); const R0 = 'pt-rec-p7';
+    await test('presend\'s simulate asked again (P7), in a wake: the signer\'s simulate fails the dual-buy\'s DOWN leg once, after its UP leg landed; asked again after 4 s it passes and the leg is sent: no stop, no recovery, every transaction sent, status traded, exit 0', () => {
+      wrapperLock(W.proj, R0);
+      try {
+        const r = P(['wake', R0], { scen: { signerSimFail: { selector: SEL_OUT, after: 1, times: 1 } } });
+        const ws = rj(rf(R0, 'wake-status.json')); const ex = rj(rf(R0, 'planner/exec.json')).summary;
+        ok(r.code === 0 && ws.status === 'traded' && !ex.stop && !ex.recovery && ex.transactions_sent === ex.transactions_total && !exists(rf(R0, 'recovery.json')) && !rj(rf(R0, 'exec-sends.json')).some((x) => x.source === 'recovery'), say(r) + clip({ ws: ws.notes, ex: { stop: ex.stop, sent: ex.transactions_sent, total: ex.transactions_total } }, 1200));
       } finally { rmrf(lockDir(W.proj)); }
     });
   }
@@ -2101,11 +2526,11 @@ async function recoverySection(root) {
     const plan = rj(probe.rf(RP, 'g-plan.json')); const cb = plan.groups.find((x) => x.kind === 'complex-buy');
     const K = plan.groups.slice(0, plan.groups.indexOf(cb)).reduce((s, x) => s + x.txs.filter((t) => String(t.data).startsWith(SEL_SPLIT)).length, 0);
     const { W, P, rf } = wakeLayout(root, 'rec-cb'); const R5 = 'pt-rec-cb';
-    await test('recovery, complete, complex-buy numbered from the whole plan: the signer\'s simulate fails its split once, after its approve landed; exec completes it in the same run (split, UP approve, sale, then the pair rebuilt at the realised proceeds): completed, its row naming "recovery", nothing half-done', () => {
+    await test('recovery, complete, complex-buy numbered from the whole plan: the signer\'s simulate fails its split after its approve landed, and again when asked after 4 s and 8 s; exec completes it in the same run (split, UP approve, sale, then the pair rebuilt at the realised proceeds): completed, its row naming "recovery", nothing half-done', () => {
       ok(cb && cb.txs.length === 6 && cb.txs[0].idx > 0, `the probe plan's complex-buy group starts at idx ${cb && cb.txs[0].idx}`);
       wrapperLock(W.proj, R5);
       try {
-        const r = P(['wake', R5], { scen: { signerSimFail: { selector: SEL_SPLIT, after: K, times: 1 } } });
+        const r = P(['wake', R5], { scen: { signerSimFail: { selector: SEL_SPLIT, after: K, times: 3 } } });
         const ws = rj(rf(R5, 'wake-status.json')); const ex = rj(rf(R5, 'planner/exec.json')).summary; const rec = rj(rf(R5, 'recovery.json')).groups[cb.id];
         const sends = rj(rf(R5, 'exec-sends.json')).filter((x) => x.source === 'recovery');
         const row = rj(rf(R5, 'fills.json')).runs.find((x) => x.route === 'complex-buy' && x.status === 'filled' && /^recovery of group complex-buy:/.test(x.error || ''));
@@ -2186,6 +2611,71 @@ async function wakeSection(root, csvStoreFrom) {
   }
   setupRecord(W.proj);
   const W1 = 'pt-wake-1';
+  // the fresh-wake verdict (wake.cjs retryVerdict, I-setup.md I.2 section 6, A fresh wake in the same run): every row of
+  // its order, every class and every cause that stays a stop, on the shapes the steps' summaries carry
+  await test('wake: the fresh-wake verdict, row by row: no CSV to trade on, then any safety cause anywhere (Half A, Half B, a recovery, a chain-mismatch closed by the repair or settled after another stop), then the repair\'s blockKind, then Half A\'s cause (transport 600, settle 900, market 180, another sender: foreign 300 with quiet_s 300), then a G cut, else none; another sender met by a recovery or by Half B while it could send makes a fresh wake foreign; beside a stop of exit 4, a transport or market verdict becomes settle (a Pending, a pending or moved nonce) or none', () => {
+    const WK = require(path.join(W.bin, 'planner', 'wake.cjs'));
+    const S = (step, cause, f = {}, ka = false) => ({ step, summary: { exit: 3, ok: false, stop: { step, cause, status: 'aborted', notes: '' }, ...f }, keep_aborted: ka });
+    const V = (o) => WK.retryVerdict({ W: { status: 'aborted', steps: {} }, rep: { blockSends: null, blockKind: null, recovered: [], chainMismatch: [] }, ...o });
+    const want = (what, r, verdict, cls, after, key) => ok(r.verdict === verdict && r.class === cls && r.after_s === after && (key === undefined || r.key === key) && typeof r.why === 'string' && r.why.length > 20 && (cls === 'foreign' ? r.quiet_s === 300 : r.quiet_s === undefined), `${what}: ${JSON.stringify(r)}`);
+    ok(JSON.stringify(WK.RETRY_AFTER_S) === JSON.stringify({ transport: 600, market: 180, settle: 900, foreign: 300 }) && WK.QUIET_S === 300, 'the waits');
+    // 1. no CSV to trade on
+    for (const st of ['no-csv', 'csv-store-mismatch']) want(st, V({ W: { status: st, steps: {} }, haStop: S('D', st) }), 'none', 'stop', null, `D:${st}`);
+    // 2. a safety cause, wherever it arose
+    for (const c of ['allowlist-refused', 'hash-mismatch', 'chain-mismatch', 'signer-changed', 'holder-mismatch', 'lock-held', 'lock-lost', 'lock-start-time', 'inflight-unsettled', 'identity', 'autonomy-gate', 'unsupported-signer-mode', 'send-lock-held', 'signer-refused']) want(c, V({ haStop: S('exec', c, {}, true) }), 'none', 'stop', null, `exec:${c}`);
+    want('signer-refused with transient (an RPC failure before signing, retried and exhausted)', V({ haStop: S('exec', 'signer-refused', { transient: true }) }), 'fresh-wake', 'market', 180, 'exec:signer-refused');
+    want('signer-refused with transient and throttled (a send throttle that outlasted its re-runs)', V({ haStop: S('exec', 'signer-refused', { transient: true, throttled: true }) }), 'fresh-wake', 'transport', 600, 'exec:signer-refused');
+    want('a Half B allowlist refusal beside a Half A transport stop', V({ haStop: S('exec', 'transport', {}, true), hb: { exit: 3, stop: { cause: 'allowlist-refused' } } }), 'none', 'stop', null, 'B:allowlist-refused');
+    want('a Half B skip for a refused signer check', V({ haStop: S('C', 'onchain-reads-failed'), hb: { exit: 3, stop: { cause: 'stale-simulation' }, refused: true } }), 'none', 'stop', null, 'B:check-refused');
+    want('a Half B signer refusal', V({ haStop: S('F', 'read-failed'), hb: { exit: 3, stop: { cause: 'signer-refused' }, half_b_stop: { kind: 'signer-refused', transient: false } } }), 'none', 'stop', null, 'B:signer-refused');
+    want('the recovery in exec refused by the signer\'s check', V({ W: { status: 'aborted', steps: { exec: { recovery: { outcome: 'stopped', stop_cause: 'allowlist-refused' } } } }, haStop: S('exec', 'stale-floor') }), 'none', 'stop', null, 'exec recovery:allowlist-refused');
+    want('the repair\'s recovery met a hash mismatch', V({ rep: { recovered: [{ run_id: 'r0', outcome: 'stopped', stop_cause: 'hash-mismatch' }] }, haStop: S('exec', 'transport', {}, true) }), 'none', 'stop', null, 'repair recovery:hash-mismatch');
+    want('the repair\'s recovery refused by the signer', V({ rep: { recovered: [{ run_id: 'r0', outcome: 'stopped', stop_cause: 'signer-refused', stop_transient: false }] }, haStop: S('exec', 'stale-floor') }), 'none', 'stop', null, 'repair recovery:signer-refused');
+    want('the recovery in exec stopped on an RPC failure before signing (signer-refused, transient): no safety cause', V({ W: { status: 'aborted', steps: { exec: { recovery: { outcome: 'stopped', stop_cause: 'signer-refused', stop_transient: true } } } }, haStop: S('exec', 'stale-floor') }), 'fresh-wake', 'market', 180, 'exec:stale-floor');
+    want('the repair closed a run-id as chain-mismatch', V({ rep: { chainMismatch: ['r0'] }, haStop: S('exec', 'nonce-lag', {}, true) }), 'none', 'stop', null, 'repair:chain-mismatch');
+    want('a transport stop whose open nonce then settled chain-mismatch', V({ haStop: S('exec', 'transport', { exit: 5, settlement: { outcome: 'chain-mismatch', foreign: null } }, true) }), 'none', 'stop', null, 'exec:transport:settlement');
+    want('Half B\'s open nonce settled chain-mismatch, beside a market stop', V({ haStop: S('G', 'stale-quote'), hb: { exit: 5, stop: { cause: 'transport' }, half_b_stop: { kind: 'transport', settlement: 'chain-mismatch' } } }), 'none', 'stop', null, 'B:settlement');
+    want('the recovery in exec, its open nonce settled chain-mismatch', V({ W: { status: 'aborted', steps: { exec: { recovery: { outcome: 'stopped', stop_cause: 'transport', settlement: 'chain-mismatch' } } } }, haStop: S('exec', 'stale-floor') }), 'none', 'stop', null, 'exec recovery:settlement');
+    want('the repair\'s recovery, its open nonce settled chain-mismatch', V({ rep: { blockSends: 'x', blockKind: 'recovery-unsettled', recovered: [{ run_id: 'r0', outcome: 'stopped', stop_cause: 'transport', settlement: 'chain-mismatch' }] } }), 'none', 'stop', null, 'repair recovery:settlement');
+    // 3. sends blocked by the start-of-run repair, before Half A's own cause
+    for (const k of ['pending', 'not-sent', 'send-lock:pending-or-unsent', 'recovery-unsettled']) want(k, V({ rep: { blockSends: `blocked: ${k}`, blockKind: k }, haStop: S('G', 'sends-blocked', {}, true) }), 'fresh-wake', 'settle', 900, `repair:${k}`);
+    for (const k of ['repair-failed:transport', 'repair-failed:rpc_unreachable', 'repair-failed:nonce-lag']) want(k, V({ rep: { blockSends: `blocked: ${k}`, blockKind: k } }), 'fresh-wake', 'transport', 600, `repair:${k}`);
+    for (const k of ['inflight-unreadable', 'send-lock:in-progress', 'send-lock:lock-unreadable', 'repair-failed:internal']) want(k, V({ rep: { blockSends: `blocked: ${k}`, blockKind: k } }), 'none', 'stop', null, `repair:${k}`);
+    want('a Pending nonce blocked the sends, G then met that pending transaction', V({ rep: { blockSends: 'run r0 nonce 7 is Pending', blockKind: 'pending' }, haStop: S('G', 'pending-transaction', { foreign: true }) }), 'fresh-wake', 'settle', 900, 'repair:pending');
+    // 4. Half A's stop
+    for (const [step, c] of [['exec', 'nonce-lag'], ['G', 'nonce-lag'], ['ramp', 'nonce-lag'], ['exec', 'transport'], ['ramp', 'transport'], ['C', 'rpc_unreachable'], ['F', 'rpc_unreachable'], ['C', 'onchain-reads-failed'], ['C', 'boundary-read-failed'], ['F', 'read-failed']]) want(`${step} ${c}`, V({ haStop: S(step, c, {}, step === 'exec' || step === 'ramp') }), 'fresh-wake', 'transport', 600, `${step}:${c}`);
+    want('pending', V({ haStop: S('exec', 'pending', { keep_aborted: true }, true) }), 'fresh-wake', 'settle', 900, 'exec:pending');
+    want('not-sent, no cancel consumed it', V({ haStop: S('exec', 'not-sent', { keep_aborted: true, settlement: { outcome: 'not-sent', foreign: null } }, true) }), 'fresh-wake', 'settle', 900, 'exec:not-sent');
+    want('not-sent, consumed by the run\'s own cancel', V({ haStop: S('exec', 'not-sent', { keep_aborted: false, own_cancel: true, settlement: { outcome: 'not-sent', foreign: { hash: '0x01' } } }) }), 'fresh-wake', 'market', 180, 'exec:not-sent');
+    want('not-sent on a signer that pins the nonce', V({ haStop: S('exec', 'not-sent', { keep_aborted: false, settlement: { outcome: 'not-sent', foreign: null } }) }), 'fresh-wake', 'market', 180, 'exec:not-sent');
+    for (const c of ['stale-simulation', 'stale-boundary', 'stale-floor', 'stale-balance', 'stale-route', 'gas-limit', 'gas-grew', 'reverted']) want(c, V({ haStop: S('exec', c) }), 'fresh-wake', 'market', 180, `exec:${c}`);
+    for (const c of ['stale-susds', 'stale-invalid', 'stale-quote', 'probe-failed', 'over-budget', 'pool-unusable', 'boundary', 'simulation-failed', 'dual-leg-infeasible', 'merge-arb-infeasible', 'audit-failed']) want(c, V({ haStop: S('G', c) }), 'fresh-wake', 'market', 180, `G:${c}`);
+    for (const c of ['self-check-failed', 'refill-not-converging']) want(`F ${c}`, V({ haStop: S('F', c) }), 'fresh-wake', 'market', 180, `F:${c}`);
+    want('ramp stale-simulation', V({ haStop: S('ramp', 'stale-simulation') }), 'fresh-wake', 'market', 180, 'ramp:stale-simulation');
+    for (const [step, c] of [['exec', 'pending-transaction'], ['exec', 'nonce-moved'], ['G', 'pending-transaction'], ['G', 'nonce-moved'], ['ramp', 'pending-transaction']]) want(`${step} ${c}, another sender`, V({ haStop: S(step, c, { foreign: true }, true) }), 'fresh-wake', 'foreign', 300, `${step}:${c}`);
+    want('not-sent, another sender\'s transaction mined at n', V({ haStop: S('exec', 'not-sent', { keep_aborted: false, own_cancel: false, settlement: { outcome: 'not-sent', foreign: { hash: '0x02' } } }) }), 'fresh-wake', 'foreign', 300, 'exec:not-sent');
+    want('a transport stop whose open nonce another sender took', V({ haStop: S('exec', 'transport', { settlement: { outcome: 'not-sent', foreign: { hash: '0x03' } } }, true) }), 'fresh-wake', 'foreign', 300, 'exec:transport');
+    want('a transport stop whose open nonce the run\'s own cancel took', V({ haStop: S('exec', 'transport', { settlement: { outcome: 'not-sent', foreign: { hash: '0x04' }, own_cancel: true } }, true) }), 'fresh-wake', 'transport', 600, 'exec:transport');
+    for (const [step, c] of [['exec', 'pending-transaction'], ['G', 'nonce-moved'], ['C', 'self-check-failed'], ['C', 'identity-check-failed'], ['D', 'parse-error'], ['exec', 'time-budget'], ['exec', 'affordability-skip'], ['ramp', 'psm3-capacity'], ['ramp', 'ramp-quote'], ['exec', 'effects-mismatch'], ['exec', 'tool-failure'], ['exec', 'internal'], ['exec', 'plan-shape'], ['exec', 'resume-refused']]) want(`${step} ${c}`, V({ haStop: S(step, c) }), 'none', 'stop', null, `${step}:${c}`);
+    want('an error summary (no stop)', V({ haStop: { step: 'F', summary: { exit: 1, ok: false, error: 'internal error: x', code: 'internal' } } }), 'none', 'stop', null, 'F:internal');
+    // 5. a G cut, 6. otherwise
+    want('a G cut', V({ haCut: { reason: 'the rebuilt plan failed its simulation again at group 5' } }), 'fresh-wake', 'market', 180, 'G:cut');
+    want('only Half B stopped', V({ W: { status: 'traded', steps: {} }, hb: { exit: 3, stop: { cause: 'affordability-skip' } } }), 'none', 'stop', null, 'B:affordability-skip');
+    want('Half B met another sender, Half A clean', V({ W: { status: 'aborted', steps: {} }, hb: { exit: 4, stop: { cause: 'nonce-moved' }, half_b_stop: { kind: 'nonce-moved', another_sender: true } } }), 'none', 'stop', null, 'B:nonce-moved');
+    want('a clean wake', V({ W: { status: 'traded', steps: {} } }), 'none', 'stop', null, null);
+    // another sender met elsewhere makes a fresh wake foreign
+    want('market, and Half B met another sender while it could send', V({ haStop: S('G', 'stale-quote'), hb: { exit: 4, stop: { cause: 'nonce-moved' }, half_b_stop: { kind: 'nonce-moved', another_sender: true } } }), 'fresh-wake', 'foreign', 300, 'G:stale-quote');
+    // a stop of exit 4 beside a transport or market one: the wake exits 4, which r3.cjs retries only for settle or foreign
+    want('market, Half B blocked (its pending transaction may be this arm\'s own; exit 4)', V({ haStop: S('G', 'stale-quote'), hb: { exit: 4, stop: { cause: 'pending-transaction' }, foreign: false }, hbBlocked: 'Half A left a nonce unsettled or a send-lock held' }), 'fresh-wake', 'settle', 900, 'G:stale-quote');
+    want('market, Half B left its own send Pending (exit 4)', V({ haStop: S('exec', 'stale-balance'), hb: { exit: 4, stop: { cause: 'pending' }, half_b_stop: { kind: 'pending' } } }), 'fresh-wake', 'settle', 900, 'exec:stale-balance');
+    want('transport, Half B left its own send Pending (exit 4)', V({ haStop: S('C', 'onchain-reads-failed'), hb: { exit: 4, stop: { cause: 'pending' }, half_b_stop: { kind: 'pending' } } }), 'fresh-wake', 'settle', 900, 'C:onchain-reads-failed');
+    want('a G cut, Half B left its own send Pending (exit 4)', V({ haCut: { reason: 'cut' }, hb: { exit: 4, stop: { cause: 'pending' }, half_b_stop: { kind: 'pending' } } }), 'fresh-wake', 'settle', 900, 'G:cut');
+    want('the repair failed on transport, G then met a pending transaction (exit 4)', V({ rep: { blockSends: 'the start-of-run repair failed', blockKind: 'repair-failed:transport' }, haStop: S('G', 'pending-transaction', { exit: 4, foreign: true }) }), 'fresh-wake', 'settle', 900, 'repair:repair-failed:transport');
+    want('market, another stop of exit 4 that is no nonce left unsettled (deny by default)', V({ haStop: S('G', 'stale-quote'), hb: { exit: 4, stop: { cause: 'some-safety-stop' } } }), 'none', 'stop', null, 'B:some-safety-stop');
+    want('market, Half B met another sender while it could send (exit 4): foreign, not settle', V({ haStop: S('G', 'stale-quote'), hb: { exit: 4, stop: { cause: 'pending-transaction' }, half_b_stop: { kind: 'pending-transaction', another_sender: true } } }), 'fresh-wake', 'foreign', 300, 'G:stale-quote');
+    want('market, the recovery in exec met another sender', V({ W: { status: 'aborted', steps: { exec: { recovery: { outcome: 'stopped', stop_cause: 'nonce-moved', another_sender: true } } } }, haStop: S('exec', 'stale-floor') }), 'fresh-wake', 'foreign', 300, 'exec:stale-floor');
+    want('settle, the repair\'s recovery met another sender', V({ rep: { blockSends: 'x', blockKind: 'recovery-unsettled', recovered: [{ run_id: 'r0', outcome: 'stopped', stop_cause: 'nonce-moved', another_sender: true }] } }), 'fresh-wake', 'foreign', 900, 'repair:recovery-unsettled');
+  });
   await test('wake: outside the wrapper (no lock) -> exit 4 not-scheduled, nothing written', () => {
     rmrf(lockDir(W.proj)); const r = P(['wake', 'pt-wake-0']); ok(r.code === 4 && r.j.stop.cause === 'not-scheduled' && !exists(rf('pt-wake-0', 'wake-status.json')), say(r));
   });
@@ -2194,6 +2684,7 @@ async function wakeSection(root, csvStoreFrom) {
     try {
       const r = P(['wake', 'pt-wake-g']); const ws = exists(rf('pt-wake-g', 'wake-status.json')) ? rj(rf('pt-wake-g', 'wake-status.json')) : {};
       ok(r.code === 3 && ws.status === 'aborted' && /autonomy\.enabled is not true/.test(ws.notes) && exists(rf('pt-wake-g', 'report.md')) && !exists(rf('pt-wake-g', 'candidates.json')), say(r) + JSON.stringify(ws));
+      ok(ws.retry && ws.retry.verdict === 'none' && ws.retry.class === 'stop' && ws.retry.key === 'W:gate' && r.j.retry && r.j.retry.key === 'W:gate', `the gate's verdict: ${JSON.stringify({ ws: ws.retry, summary: r.j.retry })}`);
     } finally { setupRecord(W.proj); rmrf(lockDir(W.proj)); }
   });
   // the supervised first run is no longer a gate (28 Oct 2026): the default setup record above has no first_successful_run,
@@ -2229,6 +2720,7 @@ async function wakeSection(root, csvStoreFrom) {
     const r = P(['wake', W1]); ok(r.code === 0, say(r)); const s = shapeOk('wake', r.j); ok(!s, s);
     const ws = rj(rf(W1, 'wake-status.json'));
     ok(ws.status === 'traded' && ws.stopped_at_step === 'H' && r.j.status === 'traded' && r.j.traded === true && r.j.h_results[W1] === 'nothing settled yet', clip({ ws, j: r.j }, 1500));
+    ok(ws.retry && ws.retry.verdict === 'none' && ws.retry.key === null && r.j.retry && r.j.retry.verdict === 'none' && !/nonce re-read/.test(ws.notes), `a clean wake's verdict: ${JSON.stringify(ws.retry)}`);
     ok(fs.readFileSync(path.join(lockDir(W.proj), 'owner.txt'), 'utf8') === owner, 'the wrapper lock changed');
     const steps = ['c', 'd', 'e', 'f', 'g', 'exec', 'halfb', 'h', 'report'].filter((x) => !exists(rf(W1, `planner/${x}.json`)));
     ok(steps.length === 0, `no detail file for ${steps.join(', ')}`);
@@ -2242,6 +2734,7 @@ async function wakeSection(root, csvStoreFrom) {
       const r = P(['wake', W2], { scen: { bodyTransform: 'drop-last-market' } });
       const ws = rj(rf(W2, 'wake-status.json'));
       ok(r.code === 3 && ws.status === 'aborted' && /Half A stopped at C/.test(ws.notes) && r.j.h_results && r.j.h_results[W1] === 'nothing settled yet' && exists(rf(W2, 'planner/halfb.json')) && !exists(rf(W2, 'candidates.json')), say(r));
+      ok(ws.retry && ws.retry.verdict === 'none' && ws.retry.key === 'C:identity-check-failed', `a structural C stop's verdict: ${JSON.stringify(ws.retry)}`);
     } finally { rmrf(lockDir(W.proj)); }
   });
 }
@@ -2350,6 +2843,7 @@ async function liveSection(workRoot) {
     if (want('wake')) await sec('wake', () => wakeSection(root, needPipe ? path.join(L.proj, 'run', 'csv') : null));
     if (want('wake')) await sec('wake-afford', () => wakeAffordSection(root));
     if (want('wake')) await sec('wake-halfdone', () => wakeHalfDoneSection(root));
+    if (want('wake')) await sec('wake-lag', () => wakeLagSection(root));
     if (want('ramp')) await sec('ramp', () => rampSection(root));
     if (want('wake')) await sec('wake-replan', () => wakeReplanSection(root));
     if (want('recovery')) await sec('recovery', () => recoverySection(root));
